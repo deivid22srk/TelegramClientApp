@@ -41,6 +41,8 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _downloadedFiles = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadedFiles = _downloadedFiles.asStateFlow()
 
+    val isPlaybackActive = MutableStateFlow(false)
+
     var client: Client? = null
     private var appId: Int = 0
     private var apiHash: String = ""

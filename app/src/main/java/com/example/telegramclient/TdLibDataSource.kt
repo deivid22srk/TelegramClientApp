@@ -69,18 +69,21 @@ class TdLibDataSource(
 
         // We might need to retry if the part isn't downloaded yet
         var attempts = 0
-        while (resultData == null && attempts < 5) {
+        while (resultData == null && attempts < 10) {
             val latch = CountDownLatch(1)
             client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
                 if (result is TdApi.Data) {
                     resultData = result.data
                 } else {
                     // If failed, make sure the file is still being downloaded
-                    client.send(TdApi.DownloadFile(fileId, 32, currentPosition, countToRead, false)) { }
+                    // Using a larger chunk size for pre-fetching when seeking
+                    val downloadSize = if (countToRead < 1024 * 1024) 1024 * 1024L else countToRead
+                    client.send(TdApi.DownloadFile(fileId, 32, currentPosition, downloadSize, false)) { }
                 }
                 latch.countDown()
             }
-            latch.await(1, TimeUnit.SECONDS)
+            // Increase wait time as attempts progress
+            latch.await(1L + attempts / 2, TimeUnit.SECONDS)
             if (resultData == null) {
                 attempts++
                 Log.w("TdLibDataSource", "Read failed for $fileId at $currentPosition, attempt $attempts")

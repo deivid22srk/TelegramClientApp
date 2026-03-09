@@ -1,6 +1,9 @@
 package com.example.telegramclient
 
+import android.app.PictureInPictureParams
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -12,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,11 +34,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import org.drinkless.tdlib.TdApi
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TelegramViewModel by viewModels()
+    private val isInPipMode = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,22 +48,45 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalLifecycleOwner provides this) {
                 MaterialTheme {
                     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        TelegramApp(viewModel)
+                        TelegramApp(viewModel, isInPipMode.value)
                     }
                 }
             }
         }
     }
+
+    override fun onUserLeaveHint() {
+        if (viewModel.isPlaybackActive.value) {
+            enterPip()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipMode.value = isInPictureInPictureMode
+    }
+
+    private fun enterPip() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        }
+    }
 }
 
 @Composable
-fun TelegramApp(viewModel: TelegramViewModel) {
+fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     var selectedChatId by remember { mutableStateOf<Long?>(null) }
     var selectedVideoFileId by remember { mutableStateOf<Int?>(null) }
 
     if (selectedVideoFileId != null) {
-        VideoPlayerScreen(viewModel, selectedVideoFileId!!) { selectedVideoFileId = null }
+        VideoPlayerScreen(viewModel, selectedVideoFileId!!, isInPip) {
+            selectedVideoFileId = null
+            viewModel.isPlaybackActive.value = false
+        }
     } else if (selectedChatId != null) {
         VideosScreen(viewModel, selectedChatId!!, 
             onBack = { selectedChatId = null },
@@ -231,11 +260,13 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Unit) {
+fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
 
     val exoPlayer = remember {
+        viewModel.isPlaybackActive.value = true
         val factory = TdLibDataSourceFactory(viewModel.client!!, fileId)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(factory))
@@ -258,37 +289,54 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> U
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Video Player", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+            if (!isInPip) {
+                TopAppBar(
+                    title = { Text("Video Player", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            resizeMode = when (resizeMode) {
+                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                AspectRatioFrameLayout.RESIZE_MODE_FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            }
+                        }) {
+                            Icon(Icons.Default.AspectRatio, contentDescription = "Resize", tint = Color.White)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Black,
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White
+                    )
                 )
-            )
+            }
         },
         containerColor = Color.Black
     ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(if (isInPip) PaddingValues(0.dp) else padding),
             contentAlignment = Alignment.Center
         ) {
             AndroidView(
                 factory = {
                     PlayerView(context).apply {
                         player = exoPlayer
-                        useController = true
+                        useController = !isInPip
                         setBackgroundColor(android.graphics.Color.BLACK)
                     }
                 },
-                modifier = Modifier.fillMaxWidth().aspectRatio(16/9f)
+                update = {
+                    it.resizeMode = resizeMode
+                    it.useController = !isInPip
+                },
+                modifier = Modifier.fillMaxSize()
             )
         }
     }
