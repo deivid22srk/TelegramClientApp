@@ -9,9 +9,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TelegramViewModel by viewModels()
@@ -19,12 +19,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    TelegramApp(viewModel)
+            // Explicitly provide LocalLifecycleOwner to prevent the "not present" crash
+            CompositionLocalProvider(LocalLifecycleOwner provides this) {
+                MaterialTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        TelegramApp(viewModel)
+                    }
                 }
             }
         }
@@ -42,9 +45,7 @@ fun TelegramApp(viewModel: TelegramViewModel) {
         is AuthState.EnterCode -> CodeScreen(viewModel)
         is AuthState.EnterPassword -> ErrorScreen("Password login not supported in this demo") { }
         is AuthState.LoggedIn -> LoggedInScreen(state.user)
-        is AuthState.Error -> ErrorScreen(state.message) { 
-             // Ideally reset to appropriate state, here just showing error
-        }
+        is AuthState.Error -> ErrorScreen(state.message) { }
     }
 }
 
@@ -172,7 +173,5 @@ fun ErrorScreen(message: String, onRetry: () -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
         Text(message)
         Spacer(modifier = Modifier.height(16.dp))
-        // Button(onClick = onRetry) { Text("Retry") } 
-        // Logic for retry is complex in this simple demo, omitted for brevity but UI supports it
     }
 }
