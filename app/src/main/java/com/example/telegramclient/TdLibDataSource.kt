@@ -45,6 +45,7 @@ class TdLibDataSource(
 
         // Request TDLib to start downloading this part
         // priority 32 is high for streaming
+        // We use position as offset and length as limit
         client.send(TdApi.DownloadFile(fileId, 32, position, if (length == C.LENGTH_UNSET.toLong()) 0L else length, false)) { }
 
         opened = true
@@ -69,7 +70,7 @@ class TdLibDataSource(
 
         // We might need to retry if the part isn't downloaded yet
         var attempts = 0
-        while (resultData == null && attempts < 10) {
+        while (resultData == null && attempts < 15) {
             val latch = CountDownLatch(1)
             client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
                 if (result is TdApi.Data) {
@@ -77,16 +78,22 @@ class TdLibDataSource(
                 } else {
                     // If failed, make sure the file is still being downloaded
                     // Using a larger chunk size for pre-fetching when seeking
-                    val downloadSize = if (countToRead < 1024 * 1024) 1024 * 1024L else countToRead
+                    // 2MB prefetch
+                    val downloadSize = if (countToRead < 2 * 1024 * 1024) 2 * 1024 * 1024L else countToRead
                     client.send(TdApi.DownloadFile(fileId, 32, currentPosition, downloadSize, false)) { }
                 }
                 latch.countDown()
             }
-            // Increase wait time as attempts progress
-            latch.await(1L + attempts / 2, TimeUnit.SECONDS)
+            // Increase wait time slightly
+            latch.await(500L + (attempts * 200), TimeUnit.MILLISECONDS)
             if (resultData == null) {
                 attempts++
                 Log.w("TdLibDataSource", "Read failed for $fileId at $currentPosition, attempt $attempts")
+
+                // Periodically re-send DownloadFile to ensure it's high priority
+                if (attempts % 3 == 0) {
+                     client.send(TdApi.DownloadFile(fileId, 32, currentPosition, 0, false)) { }
+                }
             }
         }
 

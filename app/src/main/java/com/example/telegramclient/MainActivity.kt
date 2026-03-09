@@ -22,6 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
@@ -51,6 +54,7 @@ import org.drinkless.tdlib.TdApi
 class MainActivity : ComponentActivity() {
     private val viewModel: TelegramViewModel by viewModels()
     private val isInPipMode = mutableStateOf(false)
+    private val isFullscreen = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,7 +62,10 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalLifecycleOwner provides this) {
                 MaterialTheme {
                     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        TelegramApp(viewModel, isInPipMode.value)
+                        TelegramApp(viewModel, isInPipMode.value, isFullscreen.value,
+                            onFullscreenToggle = { isFullscreen.value = !isFullscreen.value },
+                            onPipRequest = { enterPip() }
+                        )
                     }
                 }
             }
@@ -74,6 +81,9 @@ class MainActivity : ComponentActivity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         isInPipMode.value = isInPictureInPictureMode
+        if (isInPictureInPictureMode) {
+            isFullscreen.value = false
+        }
     }
 
     private fun enterPip() {
@@ -87,17 +97,21 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean) {
+fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Boolean, onFullscreenToggle: () -> Unit, onPipRequest: () -> Unit) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     var selectedChatId by remember { mutableStateOf<Long?>(null) }
     var selectedVideoFileId by remember { mutableStateOf<Int?>(null) }
     var currentTab by remember { mutableIntStateOf(0) }
 
     if (selectedVideoFileId != null) {
-        VideoPlayerScreen(viewModel, selectedVideoFileId!!, isInPip) {
-            selectedVideoFileId = null
-            viewModel.isPlaybackActive.value = false
-        }
+        VideoPlayerScreen(viewModel, selectedVideoFileId!!, isInPip, isFullscreen,
+            onFullscreenToggle = onFullscreenToggle,
+            onPipRequest = onPipRequest,
+            onBack = {
+                selectedVideoFileId = null
+                viewModel.isPlaybackActive.value = false
+            }
+        )
     } else if (selectedChatId != null) {
         VideosScreen(viewModel, selectedChatId!!, 
             onBack = { selectedChatId = null },
@@ -368,7 +382,15 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolean, onBack: () -> Unit) {
+fun VideoPlayerScreen(
+    viewModel: TelegramViewModel,
+    fileId: Int,
+    isInPip: Boolean,
+    isFullscreen: Boolean,
+    onFullscreenToggle: () -> Unit,
+    onPipRequest: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
@@ -397,7 +419,7 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
 
     Scaffold(
         topBar = {
-            if (!isInPip) {
+            if (!isInPip && !isFullscreen) {
                 TopAppBar(
                     title = { Text("Video Player", fontWeight = FontWeight.Bold) },
                     navigationIcon = {
@@ -406,6 +428,16 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
                         }
                     },
                     actions = {
+                        IconButton(onClick = onPipRequest) {
+                            Icon(Icons.Default.PictureInPicture, contentDescription = "PiP", tint = Color.White)
+                        }
+                        IconButton(onClick = onFullscreenToggle) {
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                contentDescription = "Fullscreen",
+                                tint = Color.White
+                            )
+                        }
                         IconButton(onClick = {
                             resizeMode = when (resizeMode) {
                                 AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FILL
@@ -426,10 +458,11 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
         },
         containerColor = Color.Black
     ) { padding ->
+        val actualPadding = if (isInPip || isFullscreen) PaddingValues(0.dp) else padding
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(if (isInPip) PaddingValues(0.dp) else padding),
+                .padding(actualPadding),
             contentAlignment = Alignment.Center
         ) {
             AndroidView(
