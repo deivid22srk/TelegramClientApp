@@ -56,6 +56,7 @@ fun TelegramApp(viewModel: TelegramViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
@@ -84,6 +85,7 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit) {
     val videos by viewModel.videos.collectAsStateWithLifecycle()
@@ -94,7 +96,7 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit)
             title = { Text("Videos") },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentAlignment = null)
+                    Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                 }
             }
         )
