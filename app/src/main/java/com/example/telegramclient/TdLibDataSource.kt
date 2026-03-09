@@ -40,6 +40,8 @@ class TdLibDataSource(
 
         val currentPosition = dataSpec!!.position + (if (dataSpec!!.length != C.LENGTH_UNSET.toLong()) (dataSpec!!.length - bytesRemaining) else 0L)
         val countToReadLong = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) min(readLength.toLong(), bytesRemaining) else readLength.toLong()
+        
+        // Final sanity check for countToRead as Int for ReadFilePart
         val countToRead = countToReadLong.toInt()
 
         var bytesRead = 0
