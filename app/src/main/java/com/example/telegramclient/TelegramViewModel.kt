@@ -115,15 +115,20 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         _isLoadingContent.value = true
         client?.send(TdApi.GetChats(null, 100)) { result ->
             if (result is TdApi.Chats) {
+                val chatIds = result.chatIds
                 val chatList = mutableListOf<TdApi.Chat>()
+                if (chatIds.isEmpty()) {
+                    viewModelScope.launch { _isLoadingContent.value = false }
+                    return@GetChats
+                }
                 var count = 0
-                result.chatIds.forEach { chatId ->
+                chatIds.forEach { chatId ->
                     client?.send(TdApi.GetChat(chatId)) { chat ->
                         if (chat is TdApi.Chat) {
                             synchronized(chatList) { chatList.add(chat) }
                         }
                         count++
-                        if (count == result.chatIds.size) {
+                        if (count == chatIds.size) {
                             viewModelScope.launch {
                                 _chats.value = chatList.filter { 
                                     it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup 
@@ -142,18 +147,16 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // Correct 10-parameter SearchChatMessages call for TDLib 1.8.x
+        // constructor(p0: Long, p1: TdApi.MessageTopic!, p2: String!, p3: TdApi.MessageSender!, p4: Long, p5: Int, p6: Int, p7: TdApi.SearchMessagesFilter!): TdApi.SearchChatMessages
         client?.send(TdApi.SearchChatMessages(
             chatId, 
+            null, // filterTopic
             "", // query
-            null, // filterTopic (MessageTopic)
-            null, // sender (MessageSender)
+            null, // sender
             0, // fromMessageId
             0, // offset
             100, // limit
-            TdApi.SearchMessagesFilterVideo(), // filter
-            0, // minDate
-            0 // maxDate
+            TdApi.SearchMessagesFilterVideo() // filter
         )) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
