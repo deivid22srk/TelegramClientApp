@@ -75,18 +75,22 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             when (state) {
                 is TdApi.AuthorizationStateWaitTdlibParameters -> {
-                    val parameters = TdApi.TdlibParameters()
-                    parameters.databaseDirectory = appDir
-                    parameters.useMessageDatabase = true
-                    parameters.useSecretChats = true
-                    parameters.apiId = appId
-                    parameters.apiHash = apiHash
-                    parameters.systemLanguageCode = "en"
-                    parameters.deviceModel = "Android"
-                    parameters.systemVersion = "Example"
-                    parameters.applicationVersion = "1.0"
-                    
-                    client?.send(TdApi.SetTdlibParameters(parameters)) { }
+                    client?.send(TdApi.SetTdlibParameters(
+                        false, // useTestDc
+                        appDir, // databaseDirectory
+                        appDir + "/files", // filesDirectory
+                        ByteArray(0), // databaseEncryptionKey
+                        true, // useFileDatabase
+                        true, // useChatInfoDatabase
+                        true, // useMessageDatabase
+                        true, // useSecretChats
+                        appId,
+                        apiHash,
+                        "en", // systemLanguageCode
+                        "Android", // deviceModel
+                        "Example", // systemVersion
+                        "1.0" // applicationVersion
+                    )) { }
                 }
                 is TdApi.AuthorizationStateWaitPhoneNumber -> {
                     _authState.value = AuthState.EnterPhone
