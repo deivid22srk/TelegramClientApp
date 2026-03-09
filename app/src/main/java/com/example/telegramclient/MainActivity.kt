@@ -308,10 +308,12 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
     val isLoading by viewModel.isLoadingContent.collectAsStateWithLifecycle()
 
     var selectedFilter by remember { mutableStateOf("Todos") }
+    var searchText by remember { mutableStateOf("") }
     val users by viewModel.users.collectAsStateWithLifecycle()
-    val filteredChats by remember(chats, selectedFilter, users) {
+
+    val filteredChats by remember(chats, selectedFilter, users, searchText) {
         derivedStateOf {
-            when (selectedFilter) {
+            val base = when (selectedFilter) {
                 "Pessoas" -> chats.filter { (it.type is TdApi.ChatTypePrivate || it.type is TdApi.ChatTypeSecret) &&
                     (users[(it.type as? TdApi.ChatTypePrivate)?.userId]?.type !is TdApi.UserTypeBot) }
                 "Bots" -> chats.filter {
@@ -321,6 +323,7 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
                 "Grupos" -> chats.filter { it.type is TdApi.ChatTypeBasicGroup || it.type is TdApi.ChatTypeSupergroup }
                 else -> chats
             }
+            if (searchText.isEmpty()) base else base.filter { it.title.contains(searchText, ignoreCase = true) }
         }
     }
 
@@ -330,8 +333,22 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
         }
     } else {
         Column(modifier = Modifier.fillMaxSize()) {
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = { searchText = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                placeholder = { Text("Pesquisar conversas...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = if (searchText.isNotEmpty()) {
+                    { IconButton(onClick = { searchText = "" }) { Icon(Icons.Default.Close, contentDescription = null) } }
+                } else null,
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant)
+            )
+
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 listOf("Todos", "Pessoas", "Bots", "Grupos").forEach { filter ->
@@ -544,8 +561,8 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
                             val nextMessage = if (index > 0) messages[index - 1] else null
                             val prevMessage = if (index < messages.size - 1) messages[index + 1] else null
 
-                            val isLastInGroup = nextMessage == null || nextMessage.senderId.constructor != message.senderId.constructor
-                            val isFirstInGroup = prevMessage == null || prevMessage.senderId.constructor != message.senderId.constructor
+                            val isLastInGroup = nextMessage == null || !isSameSender(nextMessage.senderId, message.senderId)
+                            val isFirstInGroup = prevMessage == null || !isSameSender(prevMessage.senderId, message.senderId)
 
                             val currentDate = android.text.format.DateFormat.format("yyyyMMdd", message.date.toLong() * 1000).toString()
                             val prevDate = prevMessage?.let { android.text.format.DateFormat.format("yyyyMMdd", it.date.toLong() * 1000).toString() }
@@ -828,6 +845,15 @@ fun AudioMessageContent(viewModel: TelegramViewModel, audio: TdApi.Audio, downlo
     }
 }
 
+fun isSameSender(s1: TdApi.MessageSender, s2: TdApi.MessageSender): Boolean {
+    if (s1.constructor != s2.constructor) return false
+    return when (s1) {
+        is TdApi.MessageSenderUser -> s2 is TdApi.MessageSenderUser && s1.userId == s2.userId
+        is TdApi.MessageSenderChat -> s2 is TdApi.MessageSenderChat && s1.chatId == s2.chatId
+        else -> false
+    }
+}
+
 @Composable
 fun VoiceNoteMessageContent(viewModel: TelegramViewModel, voiceNoteData: TdApi.VoiceNote, downloadedFiles: Map<Int, String>) {
     val fileId = voiceNoteData.voice.id
@@ -908,6 +934,9 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
                         duration = this@apply.duration
                     }
                 }
+                override fun onPositionDiscontinuity(oldPosition: androidx.media3.common.Player.PositionInfo, newPosition: androidx.media3.common.Player.PositionInfo, reason: Int) {
+                    currentPosition = newPosition.positionMs
+                }
             })
         }
     }
@@ -934,7 +963,12 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
                 }
                 Row(modifier = Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                     IconButton(onClick = { exoPlayer.seekTo(currentPosition - 10000) }) { Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
-                    Surface(onClick = { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }, shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), contentColor = Color.White) { Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pausar" else "Reproduzir", modifier = Modifier.padding(16.dp).size(48.dp)) }
+                    Surface(onClick = {
+                        if (isPlaying) exoPlayer.pause() else exoPlayer.play()
+                        isPlaying = exoPlayer.isPlaying
+                    }, shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), contentColor = Color.White) {
+                        Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pausar" else "Reproduzir", modifier = Modifier.padding(16.dp).size(48.dp))
+                    }
                     IconButton(onClick = { exoPlayer.seekTo(currentPosition + 10000) }) { Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
                 }
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp).align(Alignment.BottomCenter)) {
@@ -1171,7 +1205,19 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     var folderRenameValue by remember { mutableStateOf("") }
     var driveSearchText by remember { mutableStateOf("") }
 
-    // Logic to organize files by folders (using captions as metadata for folder paths)
+    // Logic to organize files by folders using ID-based prefixes (/fid_xxxx/ Name)
+    val folderMapping = remember(messages) {
+        messages.filter { it.content is TdApi.MessageText }
+            .map { (it.content as TdApi.MessageText).text.text }
+            .filter { it.startsWith("/fid_") }
+            .associate { line ->
+                val parts = line.split(" ", limit = 2)
+                val id = parts[0]
+                val name = parts.getOrNull(1)?.removePrefix(".init")?.trim() ?: id
+                id to name
+            }
+    }
+
     val filesByFolder = remember(messages) {
         val map = mutableMapOf<String, MutableList<TdApi.Message>>()
         messages.forEach { msg ->
@@ -1180,10 +1226,17 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 is TdApi.MessageText -> content.text.text
                 else -> ""
             }
-            if (caption.startsWith("/")) {
+            if (caption.startsWith("/fid_")) {
+                val fid = caption.substringBefore("/", "").ifEmpty { caption.substringBefore(" ", "") }.let { if (it.isEmpty()) caption.split("/").getOrNull(1)?.let { s -> "/fid_$s" } else it }
+                val actualFid = if (caption.startsWith("/fid_")) caption.substringBefore("/", "/").let { if (it == "") caption.split("/").getOrNull(1)?.let { s -> "/fid_$s" } ?: "/" else it } else "/"
+                // Simpler extraction:
+                val match = Regex("^(/fid_[^/ ]+)/?").find(caption)
+                val folderId = match?.groupValues?.get(1) ?: "/"
+                map.getOrPut(folderId) { mutableListOf() }.add(msg)
+            } else if (caption.startsWith("/") && !caption.startsWith("/fid_")) {
+                // Backwards compatibility for old folder names
                 val folder = if (caption.endsWith("/")) caption else caption.substringBeforeLast("/", "/") + "/"
-                val normalizedFolder = if (folder.startsWith("//")) folder.substring(1) else folder
-                map.getOrPut(normalizedFolder) { mutableListOf() }.add(msg)
+                map.getOrPut(folder) { mutableListOf() }.add(msg)
             } else {
                 map.getOrPut("/") { mutableListOf() }.add(msg)
             }
@@ -1237,7 +1290,7 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                     Button(onClick = { showChatSelector = true }, modifier = Modifier.padding(top = 16.dp)) { Text("Selecionar Chat") }
                 }
             }
-        } else if (isLoading && messages.isEmpty()) {
+        } else if (isLoading) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else {
             LazyVerticalGrid(
@@ -1248,18 +1301,19 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (currentFolderPath == "/") {
-                    val rootFolders = filesByFolder.keys.filter { it != "/" }.map { it.split("/").filter { s -> s.isNotEmpty() }.first() }.distinct()
+                    val rootFolders = filesByFolder.keys.filter { it != "/" }.distinct()
                     items(
                         items = rootFolders,
                         key = { it },
                         contentType = { "folder" }
-                    ) { folder ->
+                    ) { folderKey ->
+                        val folderName = folderMapping[folderKey] ?: folderKey.removePrefix("/").removeSuffix("/")
                         FolderItem(
-                            name = folder,
-                            onClick = { currentFolderPath = "/$folder/" },
+                            name = folderName,
+                            onClick = { currentFolderPath = folderKey },
                             onLongClick = {
-                                selectedFolderForMenu = folder
-                                folderRenameValue = folder
+                                selectedFolderForMenu = folderKey
+                                folderRenameValue = folderName
                             }
                         )
                     }
@@ -1334,7 +1388,8 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 text = { OutlinedTextField(value = newFolderName, onValueChange = { newFolderName = it }, label = { Text("Nome da pasta") }, singleLine = true) },
                 confirmButton = { Button(onClick = {
                     if (newFolderName.isNotBlank()) {
-                        viewModel.sendMessage(cloudChatId, "/$newFolderName/ .init")
+                        val fid = "/fid_${System.currentTimeMillis()}/"
+                        viewModel.sendMessage(cloudChatId, "$fid $newFolderName")
                     }
                     showNewFolderDialog = false; newFolderName = ""
                 }) { Text("Criar") } },

@@ -107,7 +107,10 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 fetchSenderInfo(message.senderId)
             }
             if (message.chatId == _cloudDriveChatId.value) {
-                loadCloudDriveMessages()
+                // If it's a new file or folder initialization, refresh the drive
+                if (message.content is TdApi.MessageDocument || (message.content is TdApi.MessageText && (message.content as TdApi.MessageText).text.text.startsWith("/"))) {
+                    loadCloudDriveMessages()
+                }
             }
         }
     }
@@ -490,43 +493,53 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun renameCloudDriveFolder(oldName: String, newName: String) {
+    fun renameCloudDriveFolder(fid: String, newName: String) {
         val chatId = _cloudDriveChatId.value
-        val messagesToUpdate = _cloudDriveMessages.value.filter { msg ->
-            val caption = when (val content = msg.content) {
-                is TdApi.MessageDocument -> content.caption.text
-                is TdApi.MessageText -> content.text.text
-                else -> ""
-            }
-            caption.startsWith("/$oldName/")
+        val metaMessage = _cloudDriveMessages.value.find { msg ->
+            val text = (msg.content as? TdApi.MessageText)?.text?.text ?: ""
+            text.startsWith(fid)
         }
 
-        if (messagesToUpdate.isEmpty()) return
-
-        var remaining = messagesToUpdate.size
-        messagesToUpdate.forEach { msg ->
-            val oldCaption = when (val content = msg.content) {
-                is TdApi.MessageDocument -> content.caption.text
-                is TdApi.MessageText -> content.text.text
-                else -> ""
+        if (metaMessage != null) {
+            val newText = "$fid $newName"
+            client?.send(TdApi.EditMessageText(chatId, metaMessage.id, null, TdApi.InputMessageText(TdApi.FormattedText(newText, emptyArray()), null, false))) {
+                viewModelScope.launch { loadCloudDriveMessages() }
             }
-            val newCaption = oldCaption.replaceFirst("/$oldName/", "/$newName/")
-            val handler = Client.ResultHandler {
-                synchronized(this) {
-                    remaining--
-                    if (remaining == 0) {
-                        viewModelScope.launch { loadCloudDriveMessages() }
+        } else {
+            // Fallback for legacy folders (renaming all files)
+            val legacyPrefix = if (fid.startsWith("/")) fid else "/$fid/"
+            val messagesToUpdate = _cloudDriveMessages.value.filter { msg ->
+                val caption = when (val content = msg.content) {
+                    is TdApi.MessageDocument -> content.caption.text
+                    is TdApi.MessageText -> content.text.text
+                    else -> ""
+                }
+                caption.startsWith(legacyPrefix)
+            }
+            if (messagesToUpdate.isEmpty()) return
+            var remaining = messagesToUpdate.size
+            messagesToUpdate.forEach { msg ->
+                val oldCaption = when (val content = msg.content) {
+                    is TdApi.MessageDocument -> content.caption.text
+                    is TdApi.MessageText -> content.text.text
+                    else -> ""
+                }
+                val newCaption = oldCaption.replaceFirst(legacyPrefix, "/$newName/")
+                val handler = Client.ResultHandler {
+                    synchronized(this) {
+                        remaining--
+                        if (remaining == 0) viewModelScope.launch { loadCloudDriveMessages() }
                     }
                 }
-            }
-            when (val content = msg.content) {
-                is TdApi.MessageDocument -> client?.send(TdApi.EditMessageCaption(chatId, msg.id, null, TdApi.FormattedText(newCaption, emptyArray()), false), handler)
-                is TdApi.MessageText -> client?.send(TdApi.EditMessageText(chatId, msg.id, null, TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false)), handler)
+                when (val content = msg.content) {
+                    is TdApi.MessageDocument -> client?.send(TdApi.EditMessageCaption(chatId, msg.id, null, TdApi.FormattedText(newCaption, emptyArray()), false), handler)
+                    is TdApi.MessageText -> client?.send(TdApi.EditMessageText(chatId, msg.id, null, TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false)), handler)
+                }
             }
         }
     }
 
-    fun deleteCloudDriveFolder(folderName: String) {
+    fun deleteCloudDriveFolder(fid: String) {
         val chatId = _cloudDriveChatId.value
         val messagesToDelete = _cloudDriveMessages.value.filter { msg ->
             val caption = when (val content = msg.content) {
@@ -534,7 +547,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 is TdApi.MessageText -> content.text.text
                 else -> ""
             }
-            caption.startsWith("/$folderName/")
+            caption.startsWith(fid)
         }.map { it.id }.toLongArray()
 
         if (messagesToDelete.isNotEmpty()) {
@@ -555,7 +568,10 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun loadCloudDriveMessages() {
         val chatId = _cloudDriveChatId.value
-        if (chatId == 0L) return
+        if (chatId == 0L) {
+            _cloudDriveMessages.value = emptyList()
+            return
+        }
         _isLoadingContent.value = true
         client?.send(TdApi.GetChatHistory(chatId, 0, 0, 500, false)) { result ->
             if (result is TdApi.Messages) {
@@ -570,7 +586,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun uploadFileToDrive(uri: android.net.Uri, folder: String) {
+    fun uploadFileToDrive(uri: android.net.Uri, folderPath: String) {
         viewModelScope.launch {
             try {
                 val context = getApplication<Application>()
@@ -578,7 +594,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 val fileName = getFileName(context, uri) ?: "file_${System.currentTimeMillis()}"
                 val tempFile = File(context.cacheDir, fileName)
                 tempFile.outputStream().use { inputStream.copyTo(it) }
-                sendDocument(_cloudDriveChatId.value, tempFile.absolutePath, caption = "$folder$fileName")
+                sendDocument(_cloudDriveChatId.value, tempFile.absolutePath, caption = "$folderPath$fileName")
             } catch (e: Exception) { Log.e("Telegram", "Upload failed", e) }
         }
     }

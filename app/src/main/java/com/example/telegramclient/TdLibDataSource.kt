@@ -46,7 +46,9 @@ class TdLibDataSource(
         // Request TDLib to start downloading this part
         // priority 32 is high for streaming
         // We use position as offset and length as limit
-        client.send(TdApi.DownloadFile(fileId, 32, position, if (length == C.LENGTH_UNSET.toLong()) 0L else length, false)) { }
+        // Using a 10MB chunk size for pre-fetching when opening/seeking
+        val prefetchSize = 10 * 1024 * 1024L
+        client.send(TdApi.DownloadFile(fileId, 32, position, prefetchSize, false)) { }
 
         opened = true
         transferStarted(dataSpec)
@@ -78,8 +80,8 @@ class TdLibDataSource(
                 } else {
                     // If failed, make sure the file is still being downloaded
                     // Using a larger chunk size for pre-fetching when seeking
-                    // 2MB prefetch
-                    val downloadSize = if (countToRead < 2 * 1024 * 1024) 2 * 1024 * 1024L else countToRead
+                    // 4MB prefetch
+                    val downloadSize = if (countToRead < 4 * 1024 * 1024) 4 * 1024 * 1024L else countToRead
                     client.send(TdApi.DownloadFile(fileId, 32, currentPosition, downloadSize, false)) { }
                 }
                 latch.countDown()
