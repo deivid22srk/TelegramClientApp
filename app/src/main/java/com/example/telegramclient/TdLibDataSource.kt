@@ -50,7 +50,7 @@ class TdLibDataSource(
 
         // TdApi.ReadFilePart(int fileId, long offset, int count)
         client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
-            if (result is TdApi.FilePart) {
+            if (result is TdApi.Data) {
                 resultData = result.data
             }
             synchronized(lock) { lock.notify() }
