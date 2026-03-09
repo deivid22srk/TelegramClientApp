@@ -141,7 +141,19 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     private fun fetchMe() {
         client?.send(TdApi.GetMe()) { result ->
-            if (result is TdApi.User) viewModelScope.launch { _authState.value = AuthState.LoggedIn(result) }
+            if (result is TdApi.User) {
+                viewModelScope.launch {
+                    _authState.value = AuthState.LoggedIn(result)
+                    // Request user avatar download
+                    result.profilePhoto?.small?.let { file ->
+                        if (!file.local.isDownloadingCompleted) {
+                            client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
+                        } else {
+                            onUpdateFile(file)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -182,6 +194,15 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 }
             } else {
                 viewModelScope.launch { _isLoadingContent.value = false }
+            }
+        }
+    }
+
+    fun sendMessage(chatId: Long, text: String) {
+        val content = TdApi.InputMessageText(TdApi.FormattedText(text, emptyArray()), null, false)
+        client?.send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
+            if (result is TdApi.Error) {
+                Log.e("Telegram", "Failed to send message: ${result.message}")
             }
         }
     }

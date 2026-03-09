@@ -16,7 +16,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -81,6 +84,7 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     var selectedChatId by remember { mutableStateOf<Long?>(null) }
     var selectedVideoFileId by remember { mutableStateOf<Int?>(null) }
+    var currentTab by remember { mutableIntStateOf(0) }
 
     if (selectedVideoFileId != null) {
         VideoPlayerScreen(viewModel, selectedVideoFileId!!, isInPip) {
@@ -100,7 +104,34 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean) {
             is AuthState.EnterPhone -> PhoneScreen(viewModel)
             is AuthState.EnterCode -> CodeScreen(viewModel)
             is AuthState.EnterPassword -> ErrorScreen("Password required") { }
-            is AuthState.LoggedIn -> GroupsScreen(viewModel) { selectedChatId = it }
+            is AuthState.LoggedIn -> {
+                Scaffold(
+                    bottomBar = {
+                        NavigationBar {
+                            NavigationBarItem(
+                                icon = { Icon(Icons.Default.Chat, contentDescription = "Chats") },
+                                label = { Text("Chats") },
+                                selected = currentTab == 0,
+                                onClick = { currentTab = 0 }
+                            )
+                            NavigationBarItem(
+                                icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                                label = { Text("Settings") },
+                                selected = currentTab == 1,
+                                onClick = { currentTab = 1 }
+                            )
+                        }
+                    }
+                ) { padding ->
+                    Box(modifier = Modifier.padding(padding)) {
+                        if (currentTab == 0) {
+                            GroupsScreen(viewModel) { selectedChatId = it }
+                        } else {
+                            SettingsScreen(viewModel)
+                        }
+                    }
+                }
+            }
             is AuthState.Error -> ErrorScreen(state.message) { 
                 // Basic way to reset
             }
@@ -132,7 +163,7 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(chats) { chat ->
+                items(chats, key = { it.id }) { chat ->
                     val avatarPath = chat.photo?.small?.id?.let { downloadedFiles[it] }
 
                     Card(
@@ -185,6 +216,7 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
 fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, onVideoClick: (Int) -> Unit) {
     val videos by viewModel.videos.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoadingContent.collectAsStateWithLifecycle()
+    var messageText by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -201,6 +233,41 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
                     navigationIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             )
+        },
+        bottomBar = {
+            Surface(tonalElevation = 3.dp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                        .navigationBarsPadding()
+                        .imePadding(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = messageText,
+                        onValueChange = { messageText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Type a message...") },
+                        maxLines = 4
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = {
+                            if (messageText.isNotBlank()) {
+                                viewModel.sendMessage(chatId, messageText)
+                                messageText = ""
+                            }
+                        },
+                        enabled = messageText.isNotBlank(),
+                        colors = IconButtonDefaults.iconButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send")
+                    }
+                }
+            }
         }
     ) { padding ->
         if (isLoading) {
@@ -209,7 +276,14 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(videos) { message ->
+                item {
+                    Text(
+                        "Video Previews",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+                items(videos, key = { it.id }) { message ->
                     val video = when (val content = message.content) {
                         is TdApi.MessageVideo -> content.video
                         is TdApi.MessageDocument -> {
@@ -386,5 +460,85 @@ fun ErrorScreen(message: String, onRetry: () -> Unit) {
         Text("Error", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.error)
         Text(message)
         Button(onClick = onRetry) { Text("Retry") }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(viewModel: TelegramViewModel) {
+    val authState by viewModel.authState.collectAsStateWithLifecycle()
+    val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            )
+        }
+    ) { padding ->
+        val user = (authState as? AuthState.LoggedIn)?.user
+        if (user != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                val avatarPath = user.profilePhoto?.small?.id?.let { downloadedFiles[it] }
+
+                if (avatarPath != null) {
+                    AsyncImage(
+                        model = avatarPath,
+                        contentDescription = "Profile Photo",
+                        modifier = Modifier
+                            .size(100.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Surface(
+                        modifier = Modifier
+                            .size(100.dp)
+                            .clip(CircleShape),
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = user.firstName.take(1).uppercase(),
+                                style = MaterialTheme.typography.headlineLarge
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "${user.firstName} ${user.lastName}".trim(),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = user.phoneNumber ?: "No phone number",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                OutlinedButton(
+                    onClick = { /* Implement logout if needed */ },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Logout")
+                }
+            }
+        }
     }
 }
