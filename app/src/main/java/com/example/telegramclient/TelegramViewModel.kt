@@ -53,6 +53,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _colorTheme = MutableStateFlow(settingsManager.getColorTheme())
     val colorTheme = _colorTheme.asStateFlow()
 
+    private val _downloadPath = MutableStateFlow(settingsManager.getDownloadPath())
+    val downloadPath = _downloadPath.asStateFlow()
+
     private val _cloudDriveChatId = MutableStateFlow(settingsManager.getCloudDriveChatId())
     val cloudDriveChatId = _cloudDriveChatId.asStateFlow()
 
@@ -76,6 +79,8 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             is TdApi.UpdateChatPosition -> onChatPositionUpdated(result.chatId, result.position)
         }
     }
+
+    private val downloadingFiles = mutableMapOf<Int, String>()
 
     private fun onNewMessage(message: TdApi.Message) {
         viewModelScope.launch {
@@ -180,13 +185,27 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun onUpdateFile(file: TdApi.File) {
+        if (file.local.isDownloadingActive) {
+            val progress = (file.local.downloadedSize.toDouble() / file.expectedSize * 100).toInt()
+            downloadingFiles[file.id]?.let { fileName ->
+                DownloadService.updateProgress(getApplication(), fileName, progress)
+            }
+        }
+
         if (file.local.isDownloadingCompleted) {
+            downloadingFiles.remove(file.id)
             viewModelScope.launch {
                 val current = _downloadedFiles.value.toMutableMap()
                 current[file.id] = file.local.path
                 _downloadedFiles.value = current
             }
         }
+    }
+
+    fun downloadFile(fileId: Int, fileName: String) {
+        downloadingFiles[fileId] = fileName
+        DownloadService.start(getApplication(), fileName)
+        client?.send(TdApi.DownloadFile(fileId, 1, 0, 0, false)) { }
     }
 
     private fun onAuthStateUpdated(state: TdApi.AuthorizationState) {
@@ -286,16 +305,36 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun sendMessage(chatId: Long, text: String) {
+    fun sendMessage(chatId: Long, text: String, onComplete: (() -> Unit)? = null) {
         val content = TdApi.InputMessageText(TdApi.FormattedText(text, emptyArray()), null, false)
         client?.send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
             if (result is TdApi.Error) {
                 Log.e("Telegram", "Failed to send message: ${result.message}")
+            } else {
+                onComplete?.invoke()
+            }
+        }
+    }
+
+    fun sendDocument(chatId: Long, filePath: String, caption: String = "") {
+        val content = TdApi.InputMessageDocument(
+            TdApi.InputFileLocal(filePath),
+            null,
+            false,
+            TdApi.FormattedText(caption, emptyArray())
+        )
+        client?.send(TdApi.SendMessage(chatId, null, null, null, null, content)) { result ->
+            if (result is TdApi.Error) {
+                Log.e("Telegram", "Failed to upload document: ${result.message}")
+            } else {
+                viewModelScope.launch { loadCloudDriveMessages() }
             }
         }
     }
 
     fun loadChatHistory(chatId: Long, fromMessageId: Long = 0L) {
+        if (_isLoadingContent.value && fromMessageId != 0L) return
+
         if (fromMessageId == 0L) {
             _messages.value = emptyList()
             _pinnedMessage.value = null
@@ -307,18 +346,25 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                     viewModelScope.launch { _pinnedMessage.value = result.messages[0] }
                 }
             }
+        } else {
+            _isLoadingContent.value = true
         }
         
-        client?.send(TdApi.GetChatHistory(chatId, fromMessageId, if (fromMessageId == 0L) 0 else 1, 50, false)) { result ->
+        // p0: chatId, p1: fromMessageId, p2: offset, p3: limit, p4: onlyLocal
+        client?.send(TdApi.GetChatHistory(chatId, fromMessageId, if (fromMessageId == 0L) 0 else 0, 50, false)) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
+                    val newMessages = result.messages.toList()
                     if (fromMessageId == 0L) {
-                        _messages.value = result.messages.toList()
+                        _messages.value = newMessages
                     } else {
-                        _messages.value = _messages.value + result.messages.toList()
+                        // Filter out duplicates just in case
+                        val existingIds = _messages.value.map { it.id }.toSet()
+                        val uniqueNew = newMessages.filter { it.id !in existingIds }
+                        _messages.value = _messages.value + uniqueNew
                     }
                     _isLoadingContent.value = false
-                    result.messages.forEach { msg ->
+                    newMessages.forEach { msg ->
                         requestThumbnails(msg)
                         fetchSenderInfo(msg.senderId)
                     }
@@ -392,6 +438,11 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteProfilePhoto(photoId: Long) {
         client?.send(TdApi.DeleteProfilePhoto(photoId)) { fetchMe() }
+    }
+
+    fun updateDownloadPath(path: String) {
+        _downloadPath.value = path
+        settingsManager.saveDownloadPath(path)
     }
 
     fun setCloudDriveChatId(chatId: Long) {

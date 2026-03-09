@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
@@ -21,27 +23,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PictureInPicture
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,7 +41,12 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import androidx.compose.ui.viewinterop.AndroidView
@@ -444,8 +436,14 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
                 }
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), reverseLayout = true) {
                     items(messages, key = { it.id }) { message ->
-                        ChatMessageItem(message, downloadedFiles, users, onVideoClick)
-                        if (message == messages.lastOrNull() && !isLoading) { LaunchedEffect(message.id) { viewModel.loadChatHistory(chatId, message.id) } }
+                        ChatMessageItem(viewModel, message, downloadedFiles, users, onVideoClick)
+
+                        // Check if it's the last item in the list (the oldest message) to load more
+                        if (message.id == messages.lastOrNull()?.id && !isLoading) {
+                            LaunchedEffect(message.id) {
+                                viewModel.loadChatHistory(chatId, message.id)
+                            }
+                        }
                     }
                     if (messages.isEmpty() && !isLoading) { item { Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhuma mensagem encontrada", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline) } } }
                 }
@@ -455,7 +453,7 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
 }
 
 @Composable
-fun ChatMessageItem(message: TdApi.Message, downloadedFiles: Map<Int, String>, users: Map<Long, TdApi.User>, onVideoClick: (Int) -> Unit) {
+fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downloadedFiles: Map<Int, String>, users: Map<Long, TdApi.User>, onVideoClick: (Int) -> Unit) {
     val isOutgoing = message.isOutgoing
     val senderId = (message.senderId as? TdApi.MessageSenderUser)?.userId
     val sender = senderId?.let { users[it] }
@@ -476,27 +474,29 @@ fun ChatMessageItem(message: TdApi.Message, downloadedFiles: Map<Int, String>, u
             Column(modifier = Modifier.padding(8.dp)) {
                 if (!isOutgoing && sender != null) { Text(text = "${sender.firstName} ${sender.lastName}".trim(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 4.dp)) }
                 when (val content = message.content) {
-                    is TdApi.MessageText -> { Text(content.text.text, style = MaterialTheme.typography.bodyMedium) }
+                    is TdApi.MessageText -> {
+                        ClickableFormattedText(content.text, style = MaterialTheme.typography.bodyMedium)
+                    }
                     is TdApi.MessageVideo -> {
                         VideoMessageContent(content.video, downloadedFiles, onVideoClick)
                         if (content.caption.text.isNotEmpty()) {
-                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
                     is TdApi.MessagePhoto -> {
                         PhotoMessageContent(content.photo, downloadedFiles)
                         if (content.caption.text.isNotEmpty()) {
-                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
                     is TdApi.MessageDocument -> {
                         if (content.document.mimeType.startsWith("video/")) {
                             VideoMessageContent(content.document, downloadedFiles, onVideoClick)
                         } else {
-                            Text("📄 ${content.document.fileName}", style = MaterialTheme.typography.bodyMedium)
+                            DocumentMessageContent(viewModel, content.document, downloadedFiles)
                         }
                         if (content.caption.text.isNotEmpty()) {
-                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
                     else -> { Text("Mensagem não suportada", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
@@ -509,25 +509,68 @@ fun ChatMessageItem(message: TdApi.Message, downloadedFiles: Map<Int, String>, u
 
 @Composable
 fun VideoMessageContent(video: Any, downloadedFiles: Map<Int, String>, onVideoClick: (Int) -> Unit) {
-    val (fileId, thumbnail, fileName) = when (video) {
-        is TdApi.Video -> Triple(video.video.id, video.thumbnail, video.fileName)
-        is TdApi.Document -> Triple(video.document.id, video.thumbnail, video.fileName)
-        else -> Triple(0, null, "")
+    val (fileId, thumbnail, fileName, duration) = when (video) {
+        is TdApi.Video -> Triple(video.video.id, video.thumbnail, video.fileName).let { (a, b, c) -> Quadruple(a, b, c, video.duration) }
+        is TdApi.Document -> Triple(video.document.id, video.thumbnail, video.fileName).let { (a, b, c) -> Quadruple(a, b, c, 0) }
+        else -> Quadruple(0, null, "", 0)
     }
     val thumbPath = thumbnail?.file?.id?.let { downloadedFiles[it] }
-    Box(modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)).clickable { onVideoClick(fileId) }, contentAlignment = Alignment.Center) {
-        if (thumbPath != null) { AsyncImage(model = thumbPath, contentDescription = fileName, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-        else { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp))) }
-        Surface(color = Color.Black.copy(alpha = 0.5f), shape = CircleShape, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.padding(8.dp)) }
-        if (video is TdApi.Video) { Text(text = "${video.duration}s", style = MaterialTheme.typography.labelSmall, color = Color.White, modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp).background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)) }
+    Card(
+        modifier = Modifier.fillMaxWidth().height(240.dp).clickable { onVideoClick(fileId) },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (thumbPath != null) {
+                AsyncImage(model = thumbPath, contentDescription = fileName, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Surface(color = Color.Black.copy(alpha = 0.4f), shape = CircleShape, modifier = Modifier.size(56.dp)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.padding(12.dp).size(32.dp))
+            }
+            if (duration > 0) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                ) {
+                    Text(text = "${duration / 60}:${(duration % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.labelSmall, color = Color.White, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                }
+            }
+        }
     }
 }
+
+data class Quadruple<out A, out B, out C, out D>(val first: A, val second: B, val third: C, val fourth: D)
 
 @Composable
 fun PhotoMessageContent(photo: TdApi.Photo, downloadedFiles: Map<Int, String>) {
     val photoPath = photo.sizes.lastOrNull()?.photo?.id?.let { downloadedFiles[it] }
-    if (photoPath != null) { AsyncImage(model = photoPath, contentDescription = "Photo", modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.FillWidth) }
-    else { Box(modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceColorAtElevation(12.dp)), contentAlignment = Alignment.Center) { CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp) } }
+    Card(
+        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        if (photoPath != null) {
+            AsyncImage(model = photoPath, contentDescription = "Photo", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+        } else {
+            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
+        }
+    }
+}
+
+@Composable
+fun DocumentMessageContent(viewModel: TelegramViewModel, document: TdApi.Document, downloadedFiles: Map<Int, String>) {
+    val isDownloaded = downloadedFiles.containsKey(document.document.id)
+    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).clickable { if (!isDownloaded) viewModel.downloadFile(document.document.id, document.fileName) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(if (isDownloaded) Icons.Default.Description else Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(document.fileName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text("${document.document.expectedSize / 1024} KB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -630,54 +673,154 @@ fun CodeScreen(viewModel: TelegramViewModel) {
 fun LoadingScreen() { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { CircularProgressIndicator(strokeWidth = 3.dp); Spacer(modifier = Modifier.height(16.dp)); Text("Carregando...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline) } } }
 @Composable
 fun ErrorScreen(message: String, onRetry: () -> Unit) { Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text("Error", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.error); Text(message); Button(onClick = onRetry) { Text("Retry") } } }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit, onCloudDrive: () -> Unit) {
-    val authState by viewModel.authState.collectAsStateWithLifecycle(); val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle(); val darkMode by viewModel.darkMode.collectAsStateWithLifecycle(); val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
+    val authState by viewModel.authState.collectAsStateWithLifecycle()
+    val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
     val user = (authState as? AuthState.LoggedIn)?.user
+
+    var currentSubScreen by remember { mutableStateOf("Main") }
+
     if (user != null) {
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            val avatarPath = user.profilePhoto?.small?.id?.let { downloadedFiles[it] }
-            Surface(modifier = Modifier.size(120.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, tonalElevation = 4.dp) { if (avatarPath != null) { AsyncImage(model = avatarPath, contentDescription = "Foto de Perfil", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } else { Box(contentAlignment = Alignment.Center) { Text(text = user.firstName.take(1).uppercase(), style = MaterialTheme.typography.displayMedium, color = MaterialTheme.colorScheme.onPrimaryContainer) } } }
-            Spacer(modifier = Modifier.height(24.dp)); Text(text = "${user.firstName} ${user.lastName}".trim(), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(text = if (user.phoneNumber != null) "+${user.phoneNumber}" else "Telefone não disponível", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary); Spacer(modifier = Modifier.height(48.dp))
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Aparência", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary); Spacer(modifier = Modifier.width(16.dp))
-                        Column { Text("Modo Escuro", style = MaterialTheme.typography.bodyLarge); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Sistema", "Claro", "Escuro").forEachIndexed { index, name -> FilterChip(selected = darkMode == index, onClick = { viewModel.updateDarkMode(index) }, label = { Text(name) }) } } }
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary); Spacer(modifier = Modifier.width(16.dp))
-                        Column { Text("Tema de Cores", style = MaterialTheme.typography.bodyLarge); Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Padrão", "Oceano", "Floresta").forEach { name -> FilterChip(selected = colorTheme == name, onClick = { viewModel.updateColorTheme(name) }, label = { Text(name) }) } } }
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    ProfileInfoItem(Icons.Default.Person, "Nome de usuário", user.usernames?.activeUsernames?.firstOrNull() ?: "Não definido")
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                    Row(modifier = Modifier.fillMaxWidth().clickable { onCloudDrive() }) {
-                        ProfileInfoItem(Icons.Default.Cloud, "Cloud Drive", "Meus arquivos, pastas e backup")
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                    ProfileInfoItem(Icons.Default.Settings, "Configurações da Conta", "Privacidade, Notificações...")
-                }
-            }
-            Spacer(modifier = Modifier.height(32.dp))
-            Button(
-                onClick = { /* Logout implementation */ },
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-            ) {
-                Text("Sair da Conta", fontWeight = FontWeight.Bold)
-            }
-            Spacer(modifier = Modifier.height(16.dp))
+        when (currentSubScreen) {
+            "Main" -> SettingsMainScreen(user, downloadedFiles, onEditClick, onCloudDrive, onNavigate = { currentSubScreen = it })
+            "Appearance" -> AppearanceSettingsScreen(viewModel, onBack = { currentSubScreen = "Main" })
+            "Downloads" -> DownloadSettingsScreen(viewModel, onBack = { currentSubScreen = "Main" })
         }
     }
 }
+
+@Composable
+fun SettingsMainScreen(user: TdApi.User, downloadedFiles: Map<Int, String>, onEditClick: () -> Unit, onCloudDrive: () -> Unit, onNavigate: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        val avatarPath = user.profilePhoto?.small?.id?.let { downloadedFiles[it] }
+        Surface(modifier = Modifier.size(120.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, tonalElevation = 4.dp) { if (avatarPath != null) { AsyncImage(model = avatarPath, contentDescription = "Foto de Perfil", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } else { Box(contentAlignment = Alignment.Center) { Text(text = user.firstName.take(1).uppercase(), style = MaterialTheme.typography.displayMedium, color = MaterialTheme.colorScheme.onPrimaryContainer) } } }
+        Spacer(modifier = Modifier.height(24.dp)); Text(text = "${user.firstName} ${user.lastName}".trim(), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(text = if (user.phoneNumber != null) "+${user.phoneNumber}" else "Telefone não disponível", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary); Spacer(modifier = Modifier.height(48.dp))
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                SettingsNavigationItem(Icons.Default.Settings, "Aparência", "Tema, modo escuro e cores") { onNavigate("Appearance") }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                SettingsNavigationItem(Icons.Default.Download, "Downloads", "Pasta de destino e progresso") { onNavigate("Downloads") }
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                ProfileInfoItem(Icons.Default.Person, "Nome de usuário", user.usernames?.activeUsernames?.firstOrNull() ?: "Não definido")
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                Row(modifier = Modifier.fillMaxWidth().clickable { onCloudDrive() }) {
+                    ProfileInfoItem(Icons.Default.Cloud, "Cloud Drive", "Meus arquivos, pastas e backup")
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(
+            onClick = { /* Logout implementation */ },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
+        ) {
+            Text("Sair da Conta", fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+fun SettingsNavigationItem(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().clickable { onClick() }, verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppearanceSettingsScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
+    val darkMode by viewModel.darkMode.collectAsStateWithLifecycle()
+    val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Aparência") },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } }
+            )
+        }
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column {
+                Text("Modo Escuro", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Sistema", "Claro", "Escuro").forEachIndexed { index, name ->
+                        FilterChip(selected = darkMode == index, onClick = { viewModel.updateDarkMode(index) }, label = { Text(name) })
+                    }
+                }
+            }
+            Column {
+                Text("Tema de Cores", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    listOf("Padrão", "Oceano", "Floresta").forEach { name ->
+                        FilterChip(selected = colorTheme == name, onClick = { viewModel.updateColorTheme(name) }, label = { Text(name) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DownloadSettingsScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
+    val downloadPath by viewModel.downloadPath.collectAsStateWithLifecycle()
+    var showPathInput by remember { mutableStateOf(false) }
+    var tempPath by remember { mutableStateOf(downloadPath ?: "") }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Downloads") },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } }
+            )
+        }
+    ) { padding ->
+        Column(modifier = Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Configurações de Armazenamento", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+
+            ListItem(
+                modifier = Modifier.clickable { showPathInput = true },
+                headlineContent = { Text("Pasta de Downloads") },
+                supportingContent = { Text(downloadPath ?: "Padrão do Sistema") },
+                leadingContent = { Icon(Icons.Default.Folder, contentDescription = null) }
+            )
+
+            if (showPathInput) {
+                AlertDialog(
+                    onDismissRequest = { showPathInput = false },
+                    title = { Text("Definir Pasta de Downloads") },
+                    text = {
+                        OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, label = { Text("Caminho absoluto") }, placeholder = { Text("/storage/emulated/0/Download") })
+                    },
+                    confirmButton = {
+                        Button(onClick = { viewModel.updateDownloadPath(tempPath); showPathInput = false }) { Text("Salvar") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPathInput = false }) { Text("Cancelar") }
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun ProfileInfoItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, value: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -710,6 +853,10 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
 
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { /* In a real app, convert URI to path and upload */ }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -721,7 +868,7 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
         floatingActionButton = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 SmallFloatingActionButton(onClick = { showNewFolderDialog = true }, containerColor = MaterialTheme.colorScheme.secondaryContainer) { Icon(Icons.Default.Folder, contentDescription = "Nova Pasta") }
-                FloatingActionButton(onClick = { /* Upload logic placeholder */ }) { Icon(Icons.Default.Add, contentDescription = "Adicionar Arquivo") }
+                FloatingActionButton(onClick = { filePicker.launch("*/*") }) { Icon(Icons.Default.Add, contentDescription = "Adicionar Arquivo") }
             }
         }
     ) { padding ->
@@ -782,7 +929,12 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 onDismissRequest = { showNewFolderDialog = false },
                 title = { Text("Nova Pasta") },
                 text = { OutlinedTextField(value = newFolderName, onValueChange = { newFolderName = it }, label = { Text("Nome da pasta") }, singleLine = true) },
-                confirmButton = { Button(onClick = { /* In a real app, this might upload a dummy file or update state */ showNewFolderDialog = false; newFolderName = "" }) { Text("Criar") } },
+                confirmButton = { Button(onClick = {
+                    if (newFolderName.isNotBlank()) {
+                        viewModel.sendMessage(cloudChatId, "/$newFolderName/ .init")
+                    }
+                    showNewFolderDialog = false; newFolderName = ""
+                }) { Text("Criar") } },
                 dismissButton = { TextButton(onClick = { showNewFolderDialog = false }) { Text("Cancelar") } }
             )
         }
@@ -803,4 +955,43 @@ fun FileItem(name: String, mimeType: String) {
         Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
         Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
+}
+
+@Composable
+fun ClickableFormattedText(formattedText: TdApi.FormattedText, style: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val annotatedString = buildAnnotatedString {
+        append(formattedText.text)
+        formattedText.entities.forEach { entity ->
+            val start = entity.offset
+            val end = entity.offset + entity.length
+            if (start < formattedText.text.length && end <= formattedText.text.length) {
+                when (val type = entity.type) {
+                    is TdApi.TextEntityTypeUrl -> {
+                        addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline), start, end)
+                        addStringAnnotation("URL", formattedText.text.substring(start, end), start, end)
+                    }
+                    is TdApi.TextEntityTypeTextUrl -> {
+                        addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline), start, end)
+                        addStringAnnotation("URL", type.url, start, end)
+                    }
+                    is TdApi.TextEntityTypeMention -> {
+                        addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold), start, end)
+                    }
+                }
+            }
+        }
+    }
+
+    ClickableText(
+        text = annotatedString,
+        style = style.copy(color = LocalContentColor.current),
+        modifier = modifier,
+        onClick = { offset ->
+            annotatedString.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { annotation ->
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(annotation.item))
+                context.startActivity(intent)
+            }
+        }
+    )
 }
