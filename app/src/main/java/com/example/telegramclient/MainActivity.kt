@@ -10,7 +10,9 @@ import androidx.activity.viewModels
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -631,13 +633,28 @@ fun PhotoMessageContent(photo: TdApi.Photo, downloadedFiles: Map<Int, String>) {
 
 @Composable
 fun DocumentMessageContent(viewModel: TelegramViewModel, document: TdApi.Document, downloadedFiles: Map<Int, String>) {
+    val fileStatus by viewModel.fileStatus.collectAsStateWithLifecycle()
+    val status = fileStatus[document.document.id]
     val isDownloaded = downloadedFiles.containsKey(document.document.id)
-    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).clickable { if (!isDownloaded) viewModel.downloadFile(document.document.id, document.fileName) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (isDownloaded) Icons.Default.Description else Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Column {
-            Text(document.fileName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-            Text("${document.document.expectedSize / 1024} KB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+    val isDownloading = status?.local?.isDownloadingActive == true
+
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().clickable { if (!isDownloaded && !isDownloading) viewModel.downloadFile(document.document.id, document.fileName) }, verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (isDownloaded) Icons.Default.Description else Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(document.fileName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text("${document.document.expectedSize / 1024} KB", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            }
+            if (isDownloading) {
+                IconButton(onClick = { viewModel.cancelDownload(document.document.id) }) {
+                    Icon(Icons.Default.Close, contentDescription = "Cancelar")
+                }
+            }
+        }
+        if (isDownloading && status != null) {
+            val progress = status.local.downloadedSize.toFloat() / status.expectedSize
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
         }
     }
 }
@@ -901,14 +918,20 @@ fun ProfileInfoItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     val cloudChatId by viewModel.cloudDriveChatId.collectAsStateWithLifecycle()
     val messages by viewModel.cloudDriveMessages.collectAsStateWithLifecycle()
+    val fileStatus by viewModel.fileStatus.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoadingContent.collectAsStateWithLifecycle()
     val chats by viewModel.chats.collectAsStateWithLifecycle()
+
     var showChatSelector by remember { mutableStateOf(false) }
+    var selectedMessageForMenu by remember { mutableStateOf<TdApi.Message?>(null) }
+    var selectedFolderForMenu by remember { mutableStateOf<String?>(null) }
+    var showRenameFolderDialog by remember { mutableStateOf(false) }
+    var folderRenameValue by remember { mutableStateOf("") }
 
     // Logic to organize files by folders (using captions as metadata for folder paths)
     val filesByFolder = remember(messages) {
@@ -974,13 +997,34 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 if (currentFolderPath == "/") {
                     val rootFolders = filesByFolder.keys.filter { it != "/" }.map { it.split("/").filter { s -> s.isNotEmpty() }.first() }.distinct()
                     items(rootFolders) { folder ->
-                        FolderItem(name = folder, onClick = { currentFolderPath = "/$folder/" })
+                        FolderItem(
+                            name = folder,
+                            onClick = { currentFolderPath = "/$folder/" },
+                            onLongClick = {
+                                selectedFolderForMenu = folder
+                                folderRenameValue = folder
+                            }
+                        )
                     }
                 }
 
                 items(filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList()) { msg ->
                     val doc = (msg.content as TdApi.MessageDocument).document
-                    FileItem(name = doc.fileName, mimeType = doc.mimeType)
+                    val status = fileStatus[doc.document.id]
+                    val progress = if (status != null) {
+                        if (status.local.isDownloadingActive && status.expectedSize > 0) {
+                            status.local.downloadedSize.toFloat() / status.expectedSize
+                        } else if (status.remote.isUploadingActive && status.expectedSize > 0) {
+                            status.remote.uploadedSize.toFloat() / status.expectedSize
+                        } else null
+                    } else null
+
+                    FileItem(
+                        name = doc.fileName,
+                        mimeType = doc.mimeType,
+                        progress = progress,
+                        onLongClick = { selectedMessageForMenu = msg }
+                    )
                 }
             }
         }
@@ -1021,12 +1065,58 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 dismissButton = { TextButton(onClick = { showNewFolderDialog = false }) { Text("Cancelar") } }
             )
         }
+
+        if (showRenameFolderDialog && selectedFolderForMenu != null) {
+            AlertDialog(
+                onDismissRequest = { showRenameFolderDialog = false },
+                title = { Text("Renomear Pasta") },
+                text = { OutlinedTextField(value = folderRenameValue, onValueChange = { folderRenameValue = it }, label = { Text("Novo nome") }, singleLine = true) },
+                confirmButton = { Button(onClick = {
+                    viewModel.renameCloudDriveFolder(selectedFolderForMenu!!, folderRenameValue)
+                    showRenameFolderDialog = false
+                    selectedFolderForMenu = null
+                }) { Text("Renomear") } },
+                dismissButton = { TextButton(onClick = { showRenameFolderDialog = false }) { Text("Cancelar") } }
+            )
+        }
+
+        if (selectedMessageForMenu != null) {
+            ModalBottomSheet(onDismissRequest = { selectedMessageForMenu = null }) {
+                val doc = (selectedMessageForMenu!!.content as TdApi.MessageDocument).document
+                ListItem(
+                    modifier = Modifier.clickable { viewModel.deleteCloudDriveFile(selectedMessageForMenu!!.id); selectedMessageForMenu = null },
+                    headlineContent = { Text("Excluir Arquivo", color = MaterialTheme.colorScheme.error) },
+                    leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) }
+                )
+                ListItem(
+                    modifier = Modifier.clickable { viewModel.downloadFile(doc.document.id, doc.fileName); selectedMessageForMenu = null },
+                    headlineContent = { Text("Baixar Arquivo") },
+                    leadingContent = { Icon(Icons.Default.Download, contentDescription = null) }
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+            }
+        }
+
+        if (selectedFolderForMenu != null && !showRenameFolderDialog) {
+            ModalBottomSheet(onDismissRequest = { selectedFolderForMenu = null }) {
+                ListItem(
+                    modifier = Modifier.clickable { showRenameFolderDialog = true },
+                    headlineContent = { Text("Renomear Pasta") },
+                    leadingContent = { Icon(Icons.Default.Edit, contentDescription = null) }
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FolderItem(name: String, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onClick() }) {
+fun FolderItem(name: String, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
         Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
         Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
@@ -1069,10 +1159,19 @@ fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Uni
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FileItem(name: String, mimeType: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
+fun FileItem(name: String, mimeType: String, progress: Float? = null, onLongClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
+            if (progress != null) {
+                CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(64.dp), strokeWidth = 4.dp, color = MaterialTheme.colorScheme.primary)
+            }
+        }
         Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }

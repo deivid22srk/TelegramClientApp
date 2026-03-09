@@ -68,6 +68,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _cloudDriveMessages = MutableStateFlow<List<TdApi.Message>>(emptyList())
     val cloudDriveMessages = _cloudDriveMessages.asStateFlow()
 
+    private val _fileStatus = MutableStateFlow<Map<Int, TdApi.File>>(emptyMap())
+    val fileStatus = _fileStatus.asStateFlow()
+
     val isPlaybackActive = MutableStateFlow(false)
 
     var client: Client? = null
@@ -135,7 +138,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun updateChatInList(chat: TdApi.Chat) {
-        if (chat.type !is TdApi.ChatTypeSupergroup && chat.type !is TdApi.ChatTypeBasicGroup) return
+        // Keep all chats updated to support filtering (People, Bots, Groups)
         viewModelScope.launch {
             val currentChats = _chats.value.toMutableList()
             val index = currentChats.indexOfFirst { it.id == chat.id }
@@ -196,8 +199,14 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun onUpdateFile(file: TdApi.File) {
+        viewModelScope.launch {
+            val currentStatus = _fileStatus.value.toMutableMap()
+            currentStatus[file.id] = file
+            _fileStatus.value = currentStatus
+        }
+
         if (file.local.isDownloadingActive) {
-            val progress = (file.local.downloadedSize.toDouble() / file.expectedSize * 100).toInt()
+            val progress = if (file.expectedSize > 0) (file.local.downloadedSize.toDouble() / file.expectedSize * 100).toInt() else 0
             downloadingFiles[file.id]?.let { fileName ->
                 DownloadService.updateProgress(getApplication(), fileName, progress)
             }
@@ -209,6 +218,19 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 val current = _downloadedFiles.value.toMutableMap()
                 current[file.id] = file.local.path
                 _downloadedFiles.value = current
+
+                // Handle custom download path
+                _downloadPath.value?.let { customPath ->
+                    try {
+                        val src = File(file.local.path)
+                        val destDir = File(customPath)
+                        if (!destDir.exists()) destDir.mkdirs()
+                        val destFile = File(destDir, src.name)
+                        src.copyTo(destFile, overwrite = true)
+                    } catch (e: Exception) {
+                        Log.e("Telegram", "Failed to copy to custom path", e)
+                    }
+                }
             }
         }
     }
@@ -235,6 +257,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 is TdApi.AuthorizationStateReady -> {
                     fetchMe()
                     loadChats()
+                    loadCloudDriveMessages()
                 }
                 is TdApi.AuthorizationStateClosed -> {
                     client = null
@@ -360,7 +383,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         } else {
             _isLoadingContent.value = true
         }
-        
+
         // p0: chatId, p1: fromMessageId, p2: offset, p3: limit, p4: onlyLocal
         client?.send(TdApi.GetChatHistory(chatId, fromMessageId, if (fromMessageId == 0L) 0 else 0, 50, false)) { result ->
             if (result is TdApi.Messages) {
@@ -449,6 +472,59 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteProfilePhoto(photoId: Long) {
         client?.send(TdApi.DeleteProfilePhoto(photoId)) { fetchMe() }
+    }
+
+    fun deleteCloudDriveFile(messageId: Long) {
+        val chatId = _cloudDriveChatId.value
+        client?.send(TdApi.DeleteMessages(chatId, longArrayOf(messageId), true)) {
+            viewModelScope.launch { loadCloudDriveMessages() }
+        }
+    }
+
+    fun renameCloudDriveFolder(oldName: String, newName: String) {
+        val chatId = _cloudDriveChatId.value
+        val messagesToUpdate = _cloudDriveMessages.value.filter { msg ->
+            val caption = when (val content = msg.content) {
+                is TdApi.MessageDocument -> content.caption.text
+                is TdApi.MessageText -> content.text.text
+                else -> ""
+            }
+            caption.startsWith("/$oldName/")
+        }
+
+        messagesToUpdate.forEach { msg ->
+            val oldCaption = when (val content = msg.content) {
+                is TdApi.MessageDocument -> content.caption.text
+                is TdApi.MessageText -> content.text.text
+                else -> ""
+            }
+            val newCaption = oldCaption.replaceFirst("/$oldName/", "/$newName/")
+
+            val newContent = when (val content = msg.content) {
+                is TdApi.MessageDocument -> TdApi.InputMessageDocument(
+                    TdApi.InputFileRemote(content.document.document.remote.id),
+                    null, false, TdApi.FormattedText(newCaption, emptyArray())
+                )
+                is TdApi.MessageText -> TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false)
+                else -> null
+            }
+
+            if (newContent != null) {
+                when (val content = msg.content) {
+                    is TdApi.MessageDocument -> {
+                        client?.send(TdApi.EditMessageCaption(chatId, msg.id, null, TdApi.FormattedText(newCaption, emptyArray()), false)) { }
+                    }
+                    is TdApi.MessageText -> {
+                        client?.send(TdApi.EditMessageText(chatId, msg.id, null, TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false))) { }
+                    }
+                }
+            }
+        }
+        viewModelScope.launch { loadCloudDriveMessages() }
+    }
+
+    fun cancelDownload(fileId: Int) {
+        client?.send(TdApi.CancelDownloadFile(fileId, false)) { }
     }
 
     fun updateDownloadPath(path: String) {
