@@ -11,7 +11,8 @@
         android:allowBackup="true"
         android:label="Telegram Client"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        tools:replace="android:label">
         <activity
             android:name=".MainActivity"
             android:exported="true"
