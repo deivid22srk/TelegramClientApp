@@ -298,10 +298,11 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
     val filteredChats by remember(chats, selectedFilter, users) {
         derivedStateOf {
             when (selectedFilter) {
-                "Pessoas" -> chats.filter { it.type is TdApi.ChatTypePrivate || it.type is TdApi.ChatTypeSecret }
+                "Pessoas" -> chats.filter { (it.type is TdApi.ChatTypePrivate || it.type is TdApi.ChatTypeSecret) &&
+                    (users[(it.type as? TdApi.ChatTypePrivate)?.userId]?.type !is TdApi.UserTypeBot) }
                 "Bots" -> chats.filter {
                     val type = it.type
-                    type is TdApi.ChatTypePrivate && viewModel.users.value[type.userId]?.type is TdApi.UserTypeBot
+                    type is TdApi.ChatTypePrivate && users[type.userId]?.type is TdApi.UserTypeBot
                 }
                 "Grupos" -> chats.filter { it.type is TdApi.ChatTypeBasicGroup || it.type is TdApi.ChatTypeSupergroup }
                 else -> chats
@@ -543,7 +544,15 @@ fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downlo
         }
         Surface(color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isOutgoing) 16.dp else 4.dp, bottomEnd = if (isOutgoing) 4.dp else 16.dp), modifier = Modifier.widthIn(max = 280.dp)) {
             Column(modifier = Modifier.padding(8.dp)) {
-                if (!isOutgoing && sender != null) { Text(text = "${sender.firstName} ${sender.lastName}".trim(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 4.dp)) }
+                if (!isOutgoing && sender != null) {
+                    Text(
+                        text = "${sender.firstName} ${sender.lastName}".trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 6.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
                 when (val content = message.content) {
                     is TdApi.MessageText -> {
                         ClickableFormattedText(content.text, style = MaterialTheme.typography.bodyMedium)
@@ -670,6 +679,7 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
     var isPlaying by remember { mutableStateOf(true) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    var isBuffering by remember { mutableStateOf(false) }
 
     LaunchedEffect(isFullscreen) {
         val window = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
@@ -692,7 +702,12 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
             playWhenReady = true
             addListener(object : androidx.media3.common.Player.Listener {
                 override fun onIsPlayingChanged(isPlayingChanged: Boolean) { isPlaying = isPlayingChanged }
-                override fun onPlaybackStateChanged(state: Int) { if (state == androidx.media3.common.Player.STATE_READY) { duration = this@apply.duration } }
+                override fun onPlaybackStateChanged(state: Int) {
+                    isBuffering = state == androidx.media3.common.Player.STATE_BUFFERING
+                    if (state == androidx.media3.common.Player.STATE_READY) {
+                        duration = this@apply.duration
+                    }
+                }
             })
         }
     }
@@ -701,6 +716,13 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black).clickable { showControls = !showControls }) {
         AndroidView(factory = { PlayerView(context).apply { player = exoPlayer; useController = false; setBackgroundColor(android.graphics.Color.BLACK) } }, update = { it.resizeMode = resizeMode }, modifier = Modifier.fillMaxSize())
+
+        if (isBuffering) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+
         if (showControls && !isInPip) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
                 Row(modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopStart), verticalAlignment = Alignment.CenterVertically) {
@@ -1126,9 +1148,19 @@ fun FolderItem(name: String, onClick: () -> Unit, onLongClick: () -> Unit) {
 fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    var isBuffering by remember { mutableStateOf(true) }
 
     val libVLC = remember { LibVLC(context) }
-    val mediaPlayer = remember { MediaPlayer(libVLC) }
+    val mediaPlayer = remember {
+        MediaPlayer(libVLC).apply {
+            setEventListener { event ->
+                when (event.type) {
+                    MediaPlayer.Event.Buffering -> { if (event.buffering >= 100f) isBuffering = false }
+                    MediaPlayer.Event.Playing -> isBuffering = false
+                }
+            }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
@@ -1143,16 +1175,29 @@ fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Uni
             factory = { ctx ->
                 VLCVideoLayout(ctx).apply {
                     mediaPlayer.attachViews(this, null, false, false)
-                    val media = Media(libVLC, android.net.Uri.parse("tdlib://file/$fileId"))
-                    // Note: In a real app, you'd need a proxy or custom LibVLC input to stream from TDLib like ExoPlayer factory does.
-                    // For now, this is the structural implementation.
-                    mediaPlayer.media = media
-                    media.release()
+                    // Note: Since VLC doesn't natively support TdLibDataSource,
+                    // we'll attempt to use the local path if already downloaded,
+                    // or simulate a stream if possible.
+                    viewModel.downloadedFiles.value[fileId]?.let { path ->
+                        val media = Media(libVLC, path)
+                        mediaPlayer.media = media
+                        media.release()
+                    } ?: run {
+                        // Fallback or trigger download
+                        viewModel.downloadFile(fileId, "streaming_video")
+                    }
                     mediaPlayer.play()
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        if (isBuffering) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+
         IconButton(onClick = onBack, modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White)
         }

@@ -313,6 +313,13 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                         client?.send(TdApi.GetChat(chatId)) { chat ->
                             if (chat is TdApi.Chat) {
                                 synchronized(chatList) { chatList.add(chat) }
+
+                                // Pre-fetch user info for bots if it's a private chat
+                                val type = chat.type
+                                if (type is TdApi.ChatTypePrivate) {
+                                    fetchSenderInfo(TdApi.MessageSenderUser(type.userId))
+                                }
+
                                 chat.photo?.small?.let { file ->
                                     if (!file.local.isDownloadingCompleted) {
                                         client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
