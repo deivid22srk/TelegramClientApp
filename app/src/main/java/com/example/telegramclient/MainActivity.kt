@@ -1,15 +1,20 @@
 package com.example.telegramclient
 
 import android.app.PictureInPictureParams
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -23,6 +28,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
@@ -36,6 +42,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -64,6 +72,7 @@ import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TelegramViewModel by viewModels()
@@ -111,75 +120,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun EditProfileScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
-    val authState by viewModel.authState.collectAsStateWithLifecycle()
-    val user = (authState as? AuthState.LoggedIn)?.user ?: return
-
-    var firstName by remember { mutableStateOf(user.firstName) }
-    var lastName by remember { mutableStateOf(user.lastName) }
-    var username by remember { mutableStateOf(user.usernames?.activeUsernames?.firstOrNull() ?: "") }
-    var bio by remember { mutableStateOf("") }
-
-    LaunchedEffect(user.id) {
-        viewModel.client?.send(TdApi.GetUserFullInfo(user.id)) { result ->
-            if (result is TdApi.UserFullInfo) {
-                bio = result.bio?.text ?: ""
-            }
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Editar Perfil") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
-                    }
-                },
-                actions = {
-                    TextButton(onClick = {
-                        viewModel.updateProfile(firstName, lastName)
-                        viewModel.updateUsername(username)
-                        viewModel.updateBio(bio)
-                        onBack()
-                    }) {
-                        Text("Salvar", fontWeight = FontWeight.Bold)
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (user.profilePhoto != null) {
-                Button(
-                    onClick = { viewModel.deleteProfilePhoto(user.profilePhoto!!.id) },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-                ) {
-                    Text("Remover Foto de Perfil")
-                }
-            }
-
-            OutlinedTextField(value = firstName, onValueChange = { firstName = it }, label = { Text("Nome") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(value = lastName, onValueChange = { lastName = it }, label = { Text("Sobrenome") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Nome de usuário") }, modifier = Modifier.fillMaxWidth(), prefix = { Text("@") })
-            OutlinedTextField(value = bio, onValueChange = { bio = it }, label = { Text("Bio") }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
-
-            Text("Você pode adicionar uma bio opcional ao seu perfil.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, modifier = Modifier.fillMaxWidth())
-        }
-    }
-}
-
 @Composable
 fun TelegramTheme(viewModel: TelegramViewModel, content: @Composable () -> Unit) {
     val darkMode by viewModel.darkMode.collectAsStateWithLifecycle()
@@ -193,6 +133,8 @@ fun TelegramTheme(viewModel: TelegramViewModel, content: @Composable () -> Unit)
         else -> isSystemInDarkTheme()
     }
 
+    val dynamicColor = colorTheme == "Default" || colorTheme == "Padrão"
+
     LaunchedEffect(isDark) {
         val window = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, view)
@@ -200,20 +142,21 @@ fun TelegramTheme(viewModel: TelegramViewModel, content: @Composable () -> Unit)
         controller.isAppearanceLightNavigationBars = !isDark
     }
 
-    val colorScheme = remember(colorTheme, isDark) {
-        when (colorTheme) {
-            "Oceano" -> if (isDark) {
-                darkColorScheme(primary = Color(0xFF80D8FF), secondary = Color(0xFF40C4FF), tertiary = Color(0xFF00B0FF))
-            } else {
-                lightColorScheme(primary = Color(0xFF0091EA), secondary = Color(0xFF00B0FF), tertiary = Color(0xFF40C4FF))
-            }
-            "Floresta" -> if (isDark) {
-                darkColorScheme(primary = Color(0xFFB9F6CA), secondary = Color(0xFF69F0AE), tertiary = Color(0xFF00E676))
-            } else {
-                lightColorScheme(primary = Color(0xFF2E7D32), secondary = Color(0xFF43A047), tertiary = Color(0xFF66BB6A))
-            }
-            else -> if (isDark) darkColorScheme() else lightColorScheme()
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
+        colorTheme == "Oceano" -> if (isDark) {
+            darkColorScheme(primary = Color(0xFF80D8FF), secondary = Color(0xFF40C4FF), tertiary = Color(0xFF00B0FF))
+        } else {
+            lightColorScheme(primary = Color(0xFF0091EA), secondary = Color(0xFF00B0FF), tertiary = Color(0xFF40C4FF))
+        }
+        colorTheme == "Floresta" -> if (isDark) {
+            darkColorScheme(primary = Color(0xFFB9F6CA), secondary = Color(0xFF69F0AE), tertiary = Color(0xFF00E676))
+        } else {
+            lightColorScheme(primary = Color(0xFF2E7D32), secondary = Color(0xFF43A047), tertiary = Color(0xFF66BB6A))
+        }
+        else -> if (isDark) darkColorScheme() else lightColorScheme()
     }
 
     MaterialTheme(colorScheme = colorScheme, content = content)
@@ -285,6 +228,75 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
                     onSettingsSubScreen = { currentSettingsSubScreen = it })
             }
             is AuthState.Error -> ErrorScreen(state.message) { }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditProfileScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
+    val authState by viewModel.authState.collectAsStateWithLifecycle()
+    val user = (authState as? AuthState.LoggedIn)?.user ?: return
+
+    var firstName by remember { mutableStateOf(user.firstName) }
+    var lastName by remember { mutableStateOf(user.lastName) }
+    var username by remember { mutableStateOf(user.usernames?.activeUsernames?.firstOrNull() ?: "") }
+    var bio by remember { mutableStateOf("") }
+
+    LaunchedEffect(user.id) {
+        viewModel.client?.send(TdApi.GetUserFullInfo(user.id)) { result ->
+            if (result is TdApi.UserFullInfo) {
+                bio = result.bio?.text ?: ""
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Editar Perfil") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = {
+                        viewModel.updateProfile(firstName, lastName)
+                        viewModel.updateUsername(username)
+                        viewModel.updateBio(bio)
+                        onBack()
+                    }) {
+                        Text("Salvar", fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (user.profilePhoto != null) {
+                Button(
+                    onClick = { viewModel.deleteProfilePhoto(user.profilePhoto!!.id) },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
+                ) {
+                    Text("Remover Foto de Perfil")
+                }
+            }
+
+            OutlinedTextField(value = firstName, onValueChange = { firstName = it }, label = { Text("Nome") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = lastName, onValueChange = { lastName = it }, label = { Text("Sobrenome") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Nome de usuário") }, modifier = Modifier.fillMaxWidth(), prefix = { Text("@") })
+            OutlinedTextField(value = bio, onValueChange = { bio = it }, label = { Text("Bio") }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+
+            Text("Você pode adicionar uma bio opcional ao seu perfil.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -452,6 +464,7 @@ fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChang
 @Composable
 fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, onVideoClick: (Int) -> Unit) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val bgStyle by viewModel.chatBackground.collectAsStateWithLifecycle()
     val pinnedMessage by viewModel.pinnedMessage.collectAsStateWithLifecycle()
     val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
     val users by viewModel.users.collectAsStateWithLifecycle()
@@ -490,45 +503,70 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
             }
         }
     ) { padding ->
-        if (isLoading && messages.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator(strokeWidth = 3.dp) }
-        } else {
-            Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-                if (pinnedMessage != null) {
-                    Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.secondaryContainer, tonalElevation = 2.dp) {
-                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Mensagem Fixada", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                val pinnedText = when (val content = pinnedMessage!!.content) {
-                                    is TdApi.MessageText -> content.text.text
-                                    is TdApi.MessageVideo -> "Vídeo"
-                                    is TdApi.MessagePhoto -> "Foto"
-                                    else -> "Mídia"
-                                }
-                                Text(pinnedText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                }
-                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), reverseLayout = true) {
-                    items(
-                        items = messages,
-                        key = { it.id },
-                        contentType = { it.content.constructor }
-                    ) { message ->
-                        ChatMessageItem(viewModel, message, downloadedFiles, users, onVideoClick)
+        val darkMode by viewModel.darkMode.collectAsStateWithLifecycle()
+        val isDark = when (darkMode) {
+            1 -> false
+            2 -> true
+            else -> isSystemInDarkTheme()
+        }
 
-                        // Pre-fetch when reaching the last 10 messages
-                        val index = messages.indexOf(message)
-                        if (index >= messages.size - 10 && !isLoading && messages.size >= 50) {
-                            LaunchedEffect(messages.last().id) {
-                                viewModel.loadChatHistory(chatId, messages.last().id)
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            AnimatedChatBackground(style = bgStyle, isDark = isDark)
+
+            if (isLoading && messages.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(strokeWidth = 3.dp) }
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (pinnedMessage != null) {
+                        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.secondaryContainer, tonalElevation = 2.dp) {
+                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text("Mensagem Fixada", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                    val pinnedText = when (val content = pinnedMessage!!.content) {
+                                        is TdApi.MessageText -> content.text.text
+                                        is TdApi.MessageVideo -> "Vídeo"
+                                        is TdApi.MessagePhoto -> "Foto"
+                                        else -> "Mídia"
+                                    }
+                                    Text(pinnedText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
-                    if (messages.isEmpty() && !isLoading) { item { Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhuma mensagem encontrada", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline) } } }
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp), reverseLayout = true) {
+                        itemsIndexed(
+                            items = messages,
+                            key = { _, it -> it.id },
+                            contentType = { _, it -> it.content.constructor }
+                        ) { index, message ->
+                            val nextMessage = if (index > 0) messages[index - 1] else null
+                            val prevMessage = if (index < messages.size - 1) messages[index + 1] else null
+
+                            val isLastInGroup = nextMessage == null || nextMessage.senderId.constructor != message.senderId.constructor
+                            val isFirstInGroup = prevMessage == null || prevMessage.senderId.constructor != message.senderId.constructor
+
+                            val currentDate = android.text.format.DateFormat.format("yyyyMMdd", message.date.toLong() * 1000).toString()
+                            val prevDate = prevMessage?.let { android.text.format.DateFormat.format("yyyyMMdd", it.date.toLong() * 1000).toString() }
+
+                            if (prevDate != null && currentDate != prevDate) {
+                                DateHeader(message.date)
+                            } else if (prevMessage == null) {
+                                DateHeader(message.date)
+                            }
+
+                            ChatMessageItem(viewModel, message, downloadedFiles, users, onVideoClick, isFirstInGroup, isLastInGroup)
+
+                            // Pre-fetch when reaching the last 10 messages
+                            if (index >= messages.size - 10 && !isLoading && messages.size >= 50) {
+                                LaunchedEffect(messages.last().id) {
+                                    viewModel.loadChatHistory(chatId, messages.last().id)
+                                }
+                            }
+                        }
+                        if (messages.isEmpty() && !isLoading) { item { Box(modifier = Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) { Text("Nenhuma mensagem encontrada", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline) } } }
+                    }
                 }
             }
         }
@@ -536,32 +574,120 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
 }
 
 @Composable
-fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downloadedFiles: Map<Int, String>, users: Map<Long, TdApi.User>, onVideoClick: (Int) -> Unit) {
+fun DateHeader(date: Int) {
+    val dateText = remember(date) {
+        val now = java.util.Calendar.getInstance()
+        val msgDate = java.util.Calendar.getInstance().apply { timeInMillis = date.toLong() * 1000 }
+
+        if (now.get(java.util.Calendar.DATE) == msgDate.get(java.util.Calendar.DATE)) "Hoje"
+        else if (now.get(java.util.Calendar.DATE) - 1 == msgDate.get(java.util.Calendar.DATE)) "Ontem"
+        else android.text.format.DateFormat.format("d 'de' MMMM", msgDate.timeInMillis).toString()
+    }
+
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.8f),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = dateText,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+fun AnimatedChatBackground(style: String, isDark: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "bg")
+    val animValue by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(20000, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+        label = "bg_anim"
+    )
+
+    val brush = when (style) {
+        "Oceano" -> {
+            val colors = if (isDark) {
+                listOf(Color(0xFF001F3F), Color(0xFF003366), Color(0xFF001F3F))
+            } else {
+                listOf(Color(0xFFB3E5FC), Color(0xFFE1F5FE), Color(0xFFB3E5FC))
+            }
+            Brush.linearGradient(
+                colors = colors,
+                start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                end = androidx.compose.ui.geometry.Offset(animValue * 2000f, animValue * 2000f)
+            )
+        }
+        "Floresta" -> {
+            val colors = if (isDark) {
+                listOf(Color(0xFF0A2F10), Color(0xFF1B4332), Color(0xFF0A2F10))
+            } else {
+                listOf(Color(0xFFC8E6C9), Color(0xFFE8F5E9), Color(0xFFC8E6C9))
+            }
+            Brush.linearGradient(
+                colors = colors,
+                start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                end = androidx.compose.ui.geometry.Offset(animValue * 2000f, animValue * 2000f)
+            )
+        }
+        else -> {
+            val colors = if (isDark) {
+                listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceVariant)
+            } else {
+                listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), MaterialTheme.colorScheme.surface)
+            }
+            Brush.verticalGradient(colors)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(brush))
+}
+
+@Composable
+fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downloadedFiles: Map<Int, String>, users: Map<Long, TdApi.User>, onVideoClick: (Int) -> Unit, isFirstInGroup: Boolean, isLastInGroup: Boolean) {
     val isOutgoing = message.isOutgoing
     val senderId = (message.senderId as? TdApi.MessageSenderUser)?.userId
     val sender = senderId?.let { users[it] }
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = if (isLastInGroup) 4.dp else 1.dp), horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
         if (!isOutgoing) {
-            val avatarPath = sender?.profilePhoto?.small?.id?.let { downloadedFiles[it] }
-            if (avatarPath != null) {
-                AsyncImage(model = avatarPath, contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-            } else {
-                Surface(modifier = Modifier.size(32.dp).clip(CircleShape), color = MaterialTheme.colorScheme.primaryContainer) {
-                    Box(contentAlignment = Alignment.Center) { Text(sender?.firstName?.take(1) ?: "?", style = MaterialTheme.typography.labelMedium) }
+            Box(modifier = Modifier.size(32.dp)) {
+                if (isLastInGroup) {
+                    val avatarPath = sender?.profilePhoto?.small?.id?.let { downloadedFiles[it] }
+                    if (avatarPath != null) {
+                        AsyncImage(model = avatarPath, contentDescription = null, modifier = Modifier.fillMaxSize().clip(CircleShape), contentScale = ContentScale.Crop)
+                    } else {
+                        Surface(modifier = Modifier.fillMaxSize().clip(CircleShape), color = MaterialTheme.colorScheme.primaryContainer) {
+                            Box(contentAlignment = Alignment.Center) { Text(sender?.firstName?.take(1) ?: "?", style = MaterialTheme.typography.labelMedium) }
+                        }
+                    }
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
         }
-        Surface(color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isOutgoing) 16.dp else 4.dp, bottomEnd = if (isOutgoing) 4.dp else 16.dp), modifier = Modifier.widthIn(max = 280.dp)) {
-            Column(modifier = Modifier.padding(8.dp)) {
-                if (!isOutgoing && sender != null) {
+        Surface(
+            color = if (isOutgoing) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(
+                topStart = if (isOutgoing || isFirstInGroup) 20.dp else 4.dp,
+                topEnd = if (!isOutgoing || isFirstInGroup) 20.dp else 4.dp,
+                bottomStart = if (isOutgoing || isLastInGroup) 20.dp else 4.dp,
+                bottomEnd = if (!isOutgoing || isLastInGroup) 20.dp else 4.dp
+            ),
+            modifier = Modifier.widthIn(max = 320.dp),
+            tonalElevation = if (isOutgoing) 2.dp else 0.dp
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (!isOutgoing && sender != null && isFirstInGroup) {
                     Text(
                         text = "${sender.firstName} ${sender.lastName}".trim(),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 6.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp)
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
                 when (val content = message.content) {
@@ -601,8 +727,8 @@ fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downlo
 @Composable
 fun VideoMessageContent(video: Any, downloadedFiles: Map<Int, String>, onVideoClick: (Int) -> Unit) {
     val (fileId, thumbnail, fileName, duration) = when (video) {
-        is TdApi.Video -> Triple(video.video.id, video.thumbnail, video.fileName).let { (a, b, c) -> Quadruple(a, b, c, video.duration) }
-        is TdApi.Document -> Triple(video.document.id, video.thumbnail, video.fileName).let { (a, b, c) -> Quadruple(a, b, c, 0) }
+        is TdApi.Video -> Quadruple(video.video.id, video.thumbnail, video.fileName, video.duration)
+        is TdApi.Document -> Quadruple(video.document.id, video.thumbnail, video.fileName, 0)
         else -> Quadruple(0, null, "", 0)
     }
     val thumbPath = thumbnail?.file?.id?.let { downloadedFiles[it] }
@@ -658,7 +784,7 @@ fun DocumentMessageContent(viewModel: TelegramViewModel, document: TdApi.Documen
     val isDownloaded = downloadedFiles.containsKey(document.document.id)
     val isDownloading = status?.local?.isDownloadingActive == true
 
-    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)).padding(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth().clickable { if (!isDownloaded && !isDownloading) viewModel.downloadFile(document.document.id, document.fileName) }, verticalAlignment = Alignment.CenterVertically) {
             Icon(if (isDownloaded) Icons.Default.Description else Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.width(8.dp))
@@ -860,6 +986,7 @@ fun SettingsNavigationItem(icon: androidx.compose.ui.graphics.vector.ImageVector
 fun AppearanceSettingsScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     val darkMode by viewModel.darkMode.collectAsStateWithLifecycle()
     val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
+    val chatBackground by viewModel.chatBackground.collectAsStateWithLifecycle()
     val videoPlayer by viewModel.videoPlayer.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -870,7 +997,7 @@ fun AppearanceSettingsScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Column(modifier = Modifier.padding(padding).padding(16.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Column {
                 Text("Modo Escuro", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -884,6 +1011,14 @@ fun AppearanceSettingsScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     listOf("Padrão", "Oceano", "Floresta").forEach { name ->
                         FilterChip(selected = colorTheme == name, onClick = { viewModel.updateColorTheme(name) }, label = { Text(name) })
+                    }
+                }
+            }
+            Column {
+                Text("Plano de Fundo do Chat", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    listOf("Padrão", "Oceano", "Floresta").forEach { name ->
+                        FilterChip(selected = chatBackground == name, onClick = { viewModel.updateChatBackground(name) }, label = { Text(name) })
                     }
                 }
             }
@@ -961,10 +1096,17 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
 
     var showChatSelector by remember { mutableStateOf(false) }
+    var chatFilterText by remember { mutableStateOf("") }
+    val filteredChatsForSelector by remember(chats, chatFilterText) {
+        derivedStateOf {
+            if (chatFilterText.isEmpty()) chats else chats.filter { it.title.contains(chatFilterText, ignoreCase = true) }
+        }
+    }
     var selectedMessageForMenu by remember { mutableStateOf<TdApi.Message?>(null) }
     var selectedFolderForMenu by remember { mutableStateOf<String?>(null) }
     var showRenameFolderDialog by remember { mutableStateOf(false) }
     var folderRenameValue by remember { mutableStateOf("") }
+    var driveSearchText by remember { mutableStateOf("") }
 
     // Logic to organize files by folders (using captions as metadata for folder paths)
     val filesByFolder = remember(messages) {
@@ -996,11 +1138,26 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (currentFolderPath == "/") "Cloud Drive" else currentFolderPath.removePrefix("/"), fontWeight = FontWeight.Bold) },
-                navigationIcon = { IconButton(onClick = { if (currentFolderPath == "/") onBack() else currentFolderPath = "/" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } },
-                actions = { IconButton(onClick = { showChatSelector = true }) { Icon(Icons.Default.Settings, contentDescription = "Configurar Chat") } }
-            )
+            Column {
+                TopAppBar(
+                    title = { Text(if (currentFolderPath == "/") "Cloud Drive" else currentFolderPath.removePrefix("/"), fontWeight = FontWeight.Bold) },
+                    navigationIcon = { IconButton(onClick = { if (currentFolderPath == "/") onBack() else currentFolderPath = "/" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } },
+                    actions = { IconButton(onClick = { showChatSelector = true }) { Icon(Icons.Default.Settings, contentDescription = "Configurar Chat") } }
+                )
+                OutlinedTextField(
+                    value = driveSearchText,
+                    onValueChange = { driveSearchText = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    placeholder = { Text("Pesquisar nos arquivos...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = if (driveSearchText.isNotEmpty()) {
+                        { IconButton(onClick = { driveSearchText = "" }) { Icon(Icons.Default.Close, contentDescription = null) } }
+                    } else null,
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant)
+                )
+            }
         },
         floatingActionButton = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1017,7 +1174,7 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                     Button(onClick = { showChatSelector = true }, modifier = Modifier.padding(top = 16.dp)) { Text("Selecionar Chat") }
                 }
             }
-        } else if (isLoading) {
+        } else if (isLoading && messages.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else {
             LazyVerticalGrid(
@@ -1045,8 +1202,16 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                     }
                 }
 
+                val displayFiles = if (driveSearchText.isEmpty()) {
+                    filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList()
+                } else {
+                    messages.filter { it.content is TdApi.MessageDocument }.filter {
+                        (it.content as TdApi.MessageDocument).document.fileName.contains(driveSearchText, ignoreCase = true)
+                    }
+                }
+
                 items(
-                    items = filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList(),
+                    items = displayFiles,
                     key = { it.id },
                     contentType = { "file" }
                 ) { msg ->
@@ -1077,8 +1242,15 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 text = {
                     Column {
                         Text("Escolha um grupo para armazenar seus arquivos. Recomendamos criar um grupo privado apenas com você.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+                        OutlinedTextField(
+                            value = chatFilterText,
+                            onValueChange = { chatFilterText = it },
+                            label = { Text("Filtrar chats") },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            singleLine = true
+                        )
                         LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                            items(chats) { chat ->
+                            items(filteredChatsForSelector) { chat ->
                                 ListItem(
                                     modifier = Modifier.clickable { viewModel.setCloudDriveChatId(chat.id); showChatSelector = false },
                                     headlineContent = { Text(chat.title) },
@@ -1145,6 +1317,14 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                     headlineContent = { Text("Renomear Pasta") },
                     leadingContent = { Icon(Icons.Default.Edit, contentDescription = null) }
                 )
+                ListItem(
+                    modifier = Modifier.clickable {
+                        viewModel.deleteCloudDriveFolder(selectedFolderForMenu!!)
+                        selectedFolderForMenu = null
+                    },
+                    headlineContent = { Text("Excluir Pasta", color = MaterialTheme.colorScheme.error) },
+                    leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) }
+                )
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
@@ -1168,7 +1348,6 @@ fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Uni
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var isBuffering by remember { mutableStateOf(true) }
-
     val libVLC = remember { LibVLC(context) }
     val mediaPlayer = remember {
         MediaPlayer(libVLC).apply {
@@ -1194,29 +1373,19 @@ fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Uni
             factory = { ctx ->
                 VLCVideoLayout(ctx).apply {
                     mediaPlayer.attachViews(this, null, false, false)
-                    // Note: Since VLC doesn't natively support TdLibDataSource,
-                    // we'll attempt to use the local path if already downloaded,
-                    // or simulate a stream if possible.
                     viewModel.downloadedFiles.value[fileId]?.let { path ->
                         val media = Media(libVLC, path)
                         mediaPlayer.media = media
                         media.release()
-                    } ?: run {
-                        // Fallback or trigger download
-                        viewModel.downloadFile(fileId, "streaming_video")
-                    }
+                    } ?: run { viewModel.downloadFile(fileId, "streaming_video") }
                     mediaPlayer.play()
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
-
         if (isBuffering) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Color.White)
-            }
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
         }
-
         IconButton(onClick = onBack, modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White)
         }
@@ -1248,15 +1417,15 @@ fun ClickableFormattedText(formattedText: TdApi.FormattedText, style: androidx.c
         formattedText.entities.forEach { entity ->
             val start = entity.offset
             val end = entity.offset + entity.length
-            if (start < formattedText.text.length && end <= formattedText.text.length) {
-                when (val type = entity.type) {
+            if (start >= 0 && end <= formattedText.text.length) {
+                when (entity.type) {
                     is TdApi.TextEntityTypeUrl -> {
                         addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline), start, end)
                         addStringAnnotation("URL", formattedText.text.substring(start, end), start, end)
                     }
                     is TdApi.TextEntityTypeTextUrl -> {
                         addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline), start, end)
-                        addStringAnnotation("URL", type.url, start, end)
+                        addStringAnnotation("URL", (entity.type as TdApi.TextEntityTypeTextUrl).url, start, end)
                     }
                     is TdApi.TextEntityTypeMention -> {
                         addStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold), start, end)
@@ -1265,14 +1434,13 @@ fun ClickableFormattedText(formattedText: TdApi.FormattedText, style: androidx.c
             }
         }
     }
-
     ClickableText(
         text = annotatedString,
         style = style.copy(color = LocalContentColor.current),
         modifier = modifier,
         onClick = { offset ->
             annotatedString.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { annotation ->
-                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(annotation.item))
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))
                 context.startActivity(intent)
             }
         }

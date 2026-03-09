@@ -23,6 +23,9 @@ class SettingsManager(context: Context) {
     fun saveColorTheme(theme: String) = prefs.edit().putString("color_theme", theme).apply()
     fun getColorTheme(): String = prefs.getString("color_theme", "Default") ?: "Default"
 
+    fun saveChatBackground(bg: String) = prefs.edit().putString("chat_background", bg).apply()
+    fun getChatBackground(): String = prefs.getString("chat_background", "Padrão") ?: "Padrão"
+
     fun saveCloudDriveChatId(chatId: Long) = prefs.edit().putLong("cloud_drive_chat_id", chatId).apply()
     fun getCloudDriveChatId(): Long = prefs.getLong("cloud_drive_chat_id", 0L)
 
