@@ -113,7 +113,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun loadChats() {
         _isLoadingContent.value = true
-        // constructor(p0: TdApi.ChatList!, p1: Int): TdApi.GetChats
+        // TdApi.GetChats(ChatList chatList, int limit)
         client?.send(TdApi.GetChats(TdApi.ChatListMain(), 100)) { result ->
             if (result is TdApi.Chats) {
                 val chatIds = result.chatIds
@@ -148,18 +148,19 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // Set properties directly instead of constructor to avoid signature issues
-        val searchRequest = TdApi.SearchChatMessages()
-        searchRequest.chatId = chatId
-        searchRequest.query = ""
-        searchRequest.filter = TdApi.SearchMessagesFilterVideo()
-        searchRequest.limit = 100
-        searchRequest.fromMessageId = 0
-        searchRequest.offset = 0
-        searchRequest.senderId = null
-        searchRequest.messageThreadId = 0
         
-        client?.send(searchRequest) { result ->
+        // Constructor from error log: constructor(p0: Long, p1: TdApi.MessageTopic!, p2: String!, p3: TdApi.MessageSender!, p4: Long, p5: Int, p6: Int, p7: TdApi.SearchMessagesFilter!): TdApi.SearchChatMessages
+        // p0: chatId, p1: filterTopic, p2: query, p3: sender, p4: fromMessageId, p5: offset, p6: limit, p7: filter
+        client?.send(TdApi.SearchChatMessages(
+            chatId, 
+            null as TdApi.MessageTopic?,
+            "", 
+            null as TdApi.MessageSender?,
+            0L, 
+            0, 
+            100, 
+            TdApi.SearchMessagesFilterVideo()
+        )) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
                     _videos.value = result.messages.toList()
