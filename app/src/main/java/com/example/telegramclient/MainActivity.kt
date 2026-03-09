@@ -7,17 +7,24 @@ import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -115,8 +122,8 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean) {
                                 onClick = { currentTab = 0 }
                             )
                             NavigationBarItem(
-                                icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                                label = { Text("Settings") },
+                                icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
+                                label = { Text("Profile") },
                                 selected = currentTab == 1,
                                 onClick = { currentTab = 1 }
                             )
@@ -162,31 +169,29 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
                 CircularProgressIndicator()
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(bottom = 16.dp),
+            ) {
                 items(chats, key = { it.id }) { chat ->
                     val avatarPath = chat.photo?.small?.id?.let { downloadedFiles[it] }
 
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
+                    ListItem(
+                        modifier = Modifier.clickable {
                             viewModel.loadVideos(chat.id)
                             onGroupClick(chat.id)
                         },
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        leadingContent = {
                             if (avatarPath != null) {
                                 AsyncImage(
                                     model = avatarPath,
                                     contentDescription = "Group Avatar",
-                                    modifier = Modifier.size(50.dp).clip(CircleShape),
+                                    modifier = Modifier.size(48.dp).clip(CircleShape),
                                     contentScale = ContentScale.Crop
                                 )
                             } else {
                                 Surface(
-                                    modifier = Modifier.size(50.dp).clip(CircleShape),
+                                    modifier = Modifier.size(48.dp).clip(CircleShape),
                                     color = MaterialTheme.colorScheme.secondaryContainer
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -194,17 +199,27 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
                                     }
                                 }
                             }
-
-                            Spacer(modifier = Modifier.width(16.dp))
-
-                            Column {
-                                Text(chat.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                if (chat.unreadCount > 0) {
-                                    Text("${chat.unreadCount} unread messages", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                }
+                        },
+                        headlineContent = {
+                            Text(chat.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        },
+                        supportingContent = {
+                            if (chat.unreadCount > 0) {
+                                Text("${chat.unreadCount} unread messages", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Text("No new messages", style = MaterialTheme.typography.bodySmall)
                             }
+                        },
+                        trailingContent = {
+                           chat.lastMessage?.let { lastMsg ->
+                               Text(
+                                   text = android.text.format.DateFormat.format("HH:mm", lastMsg.date.toLong() * 1000).toString(),
+                                   style = MaterialTheme.typography.labelSmall
+                               )
+                           }
                         }
-                    }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
@@ -221,21 +236,21 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Videos", fontWeight = FontWeight.Bold) },
+                title = { Text("Channel Content", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         },
         bottomBar = {
-            Surface(tonalElevation = 3.dp) {
+            Surface(tonalElevation = 3.dp, shadowElevation = 8.dp) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -249,7 +264,8 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
                         onValueChange = { messageText = it },
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Type a message...") },
-                        maxLines = 4
+                        maxLines = 4,
+                        shape = RoundedCornerShape(24.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     IconButton(
@@ -261,7 +277,9 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
                         },
                         enabled = messageText.isNotBlank(),
                         colors = IconButtonDefaults.iconButtonColors(
-                            contentColor = MaterialTheme.colorScheme.primary
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     ) {
                         Icon(Icons.Default.Send, contentDescription = "Send")
@@ -275,14 +293,22 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
                 CircularProgressIndicator()
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item(span = { GridItemSpan(2) }) {
                     Text(
                         "Video Previews",
                         style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
+
                 items(videos, key = { it.id }) { message ->
                     val video = when (val content = message.content) {
                         is TdApi.MessageVideo -> content.video
@@ -297,31 +323,39 @@ fun VideosScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit,
                         val fileId = if (video is TdApi.Video) video.video.id else (video as TdApi.Document).document.id
 
                         Card(
-                            modifier = Modifier.fillMaxWidth().clickable { onVideoClick(fileId) },
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1f).clickable { onVideoClick(fileId) },
+                            shape = RoundedCornerShape(12.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = "Play",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                                Text(
-                                    text = fileName ?: "Unnamed Video",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium
-                                )
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                // Background for preview
+                                Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                }
+
+                                // Label at bottom
+                                Box(
+                                    modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = 0.6f)).padding(8.dp)
+                                ) {
+                                    Text(
+                                        text = fileName ?: "Unnamed Video",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White,
+                                        maxLines = 2
+                                    )
+                                }
                             }
                         }
                     }
                 }
+
                 if (videos.isEmpty()) {
-                    item {
+                    item(span = { GridItemSpan(2) }) {
                         Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             Text("No videos found in this group")
                         }
@@ -472,10 +506,10 @@ fun SettingsScreen(viewModel: TelegramViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                title = { Text("Profile", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         }
