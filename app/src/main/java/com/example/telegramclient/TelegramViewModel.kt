@@ -41,6 +41,12 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _downloadedFiles = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadedFiles = _downloadedFiles.asStateFlow()
 
+    private val _darkMode = MutableStateFlow(settingsManager.getDarkMode())
+    val darkMode = _darkMode.asStateFlow()
+
+    private val _colorTheme = MutableStateFlow(settingsManager.getColorTheme())
+    val colorTheme = _colorTheme.asStateFlow()
+
     val isPlaybackActive = MutableStateFlow(false)
 
     var client: Client? = null
@@ -102,6 +108,16 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         } else {
             _authState.value = AuthState.EnterCredentials
         }
+    }
+
+    fun updateDarkMode(mode: Int) {
+        _darkMode.value = mode
+        settingsManager.saveDarkMode(mode)
+    }
+
+    fun updateColorTheme(theme: String) {
+        _colorTheme.value = theme
+        settingsManager.saveColorTheme(theme)
     }
 
     fun initializeClient(id: String, hash: String) {
@@ -293,5 +309,21 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 viewModelScope.launch { _isLoadingContent.value = false }
             }
         }
+    }
+
+    fun updateProfile(firstName: String, lastName: String) {
+        client?.send(TdApi.SetName(firstName, lastName)) { fetchMe() }
+    }
+
+    fun updateUsername(username: String) {
+        client?.send(TdApi.SetUsername(username)) { fetchMe() }
+    }
+
+    fun updateBio(bio: String) {
+        client?.send(TdApi.SetBio(bio)) { fetchMe() }
+    }
+
+    fun deleteProfilePhoto(photoId: Long) {
+        client?.send(TdApi.DeleteProfilePhoto(photoId)) { fetchMe() }
     }
 }
