@@ -435,14 +435,18 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun requestThumbnails(message: TdApi.Message) {
-        val fileId = when (val content = message.content) {
-            is TdApi.MessagePhoto -> content.photo.sizes.lastOrNull()?.photo?.id
-            is TdApi.MessageVideo -> content.video.thumbnail?.file?.id
-            is TdApi.MessageDocument -> content.document.thumbnail?.file?.id
-            else -> null
+        val fileIds = mutableListOf<Int>()
+        when (val content = message.content) {
+            is TdApi.MessagePhoto -> {
+                content.photo.sizes.lastOrNull()?.photo?.id?.let { fileIds.add(it) }
+                // Also get a small one for faster initial load
+                content.photo.sizes.firstOrNull()?.photo?.id?.let { fileIds.add(it) }
+            }
+            is TdApi.MessageVideo -> content.video.thumbnail?.file?.id?.let { fileIds.add(it) }
+            is TdApi.MessageDocument -> content.document.thumbnail?.file?.id?.let { fileIds.add(it) }
         }
 
-        fileId?.let { id ->
+        fileIds.forEach { id ->
             client?.send(TdApi.DownloadFile(id, 1, 0, 0, false)) { }
         }
     }

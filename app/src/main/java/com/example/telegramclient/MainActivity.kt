@@ -200,18 +200,20 @@ fun TelegramTheme(viewModel: TelegramViewModel, content: @Composable () -> Unit)
         controller.isAppearanceLightNavigationBars = !isDark
     }
 
-    val colorScheme = when (colorTheme) {
-        "Oceano" -> if (isDark) {
-            darkColorScheme(primary = Color(0xFF80D8FF), secondary = Color(0xFF40C4FF), tertiary = Color(0xFF00B0FF))
-        } else {
-            lightColorScheme(primary = Color(0xFF0091EA), secondary = Color(0xFF00B0FF), tertiary = Color(0xFF40C4FF))
+    val colorScheme = remember(colorTheme, isDark) {
+        when (colorTheme) {
+            "Oceano" -> if (isDark) {
+                darkColorScheme(primary = Color(0xFF80D8FF), secondary = Color(0xFF40C4FF), tertiary = Color(0xFF00B0FF))
+            } else {
+                lightColorScheme(primary = Color(0xFF0091EA), secondary = Color(0xFF00B0FF), tertiary = Color(0xFF40C4FF))
+            }
+            "Floresta" -> if (isDark) {
+                darkColorScheme(primary = Color(0xFFB9F6CA), secondary = Color(0xFF69F0AE), tertiary = Color(0xFF00E676))
+            } else {
+                lightColorScheme(primary = Color(0xFF2E7D32), secondary = Color(0xFF43A047), tertiary = Color(0xFF66BB6A))
+            }
+            else -> if (isDark) darkColorScheme() else lightColorScheme()
         }
-        "Floresta" -> if (isDark) {
-            darkColorScheme(primary = Color(0xFFB9F6CA), secondary = Color(0xFF69F0AE), tertiary = Color(0xFF00E676))
-        } else {
-            lightColorScheme(primary = Color(0xFF2E7D32), secondary = Color(0xFF43A047), tertiary = Color(0xFF66BB6A))
-        }
-        else -> if (isDark) darkColorScheme() else lightColorScheme()
     }
 
     MaterialTheme(colorScheme = colorScheme, content = content)
@@ -333,7 +335,11 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
-                items(filteredChats, key = { it.id }) { chat ->
+                items(
+                    items = filteredChats,
+                    key = { it.id },
+                    contentType = { "chat" }
+                ) { chat ->
                     ChatListItem(
                         chat = chat,
                         avatarPath = chat.photo?.small?.id?.let { downloadedFiles[it] },
@@ -507,13 +513,18 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
                     }
                 }
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), reverseLayout = true) {
-                    items(messages, key = { it.id }) { message ->
+                    items(
+                        items = messages,
+                        key = { it.id },
+                        contentType = { it.content.constructor }
+                    ) { message ->
                         ChatMessageItem(viewModel, message, downloadedFiles, users, onVideoClick)
 
-                        // Check if it's the last item in the list (the oldest message) to load more
-                        if (message.id == messages.lastOrNull()?.id && !isLoading) {
-                            LaunchedEffect(message.id) {
-                                viewModel.loadChatHistory(chatId, message.id)
+                        // Pre-fetch when reaching the last 10 messages
+                        val index = messages.indexOf(message)
+                        if (index >= messages.size - 10 && !isLoading && messages.size >= 50) {
+                            LaunchedEffect(messages.last().id) {
+                                viewModel.loadChatHistory(chatId, messages.last().id)
                             }
                         }
                     }
@@ -1018,7 +1029,11 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
             ) {
                 if (currentFolderPath == "/") {
                     val rootFolders = filesByFolder.keys.filter { it != "/" }.map { it.split("/").filter { s -> s.isNotEmpty() }.first() }.distinct()
-                    items(rootFolders) { folder ->
+                    items(
+                        items = rootFolders,
+                        key = { it },
+                        contentType = { "folder" }
+                    ) { folder ->
                         FolderItem(
                             name = folder,
                             onClick = { currentFolderPath = "/$folder/" },
@@ -1030,7 +1045,11 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                     }
                 }
 
-                items(filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList()) { msg ->
+                items(
+                    items = filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList(),
+                    key = { it.id },
+                    contentType = { "file" }
+                ) { msg ->
                     val doc = (msg.content as TdApi.MessageDocument).document
                     val status = fileStatus[doc.document.id]
                     val progress = if (status != null) {
