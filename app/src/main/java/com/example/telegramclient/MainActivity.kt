@@ -19,6 +19,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -168,6 +169,7 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val videoPlayer by viewModel.videoPlayer.collectAsStateWithLifecycle()
     var selectedChatId by remember { mutableStateOf<Long?>(null) }
+    var selectedChatInfoId by remember { mutableStateOf<Long?>(null) }
     var selectedVideoFileId by remember { mutableStateOf<Int?>(null) }
     var currentTab by remember { mutableIntStateOf(0) }
     var isEditingProfile by remember { mutableStateOf(false) }
@@ -210,7 +212,17 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
         BackHandler { selectedChatId = null }
         ChatScreen(viewModel, selectedChatId!!,
             onBack = { selectedChatId = null },
-            onVideoClick = { selectedVideoFileId = it }
+            onVideoClick = { selectedVideoFileId = it },
+            onTitleClick = { selectedChatInfoId = it }
+        )
+    } else if (selectedChatInfoId != null) {
+        BackHandler { selectedChatInfoId = null }
+        ChatInfoScreen(viewModel, selectedChatInfoId!!,
+            onBack = { selectedChatInfoId = null },
+            onMessageClick = {
+                selectedChatId = it
+                selectedChatInfoId = null
+            }
         )
     } else {
         when (val state = authState) {
@@ -222,7 +234,7 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
             is AuthState.EnterPassword -> ErrorScreen("Password required") { }
             is AuthState.LoggedIn -> {
                 LoggedInMainScreen(viewModel, currentTab, onTabChange = { currentTab = it },
-                    onGroupClick = { selectedChatId = it },
+                    onGroupClick = { selectedChatInfoId = it },
                     onEditProfile = { isEditingProfile = true },
                     onCloudDrive = { isCloudDriveOpen = true },
                     onSettingsSubScreen = { currentSettingsSubScreen = it })
@@ -479,7 +491,7 @@ fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChang
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, onVideoClick: (Int) -> Unit) {
+fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, onVideoClick: (Int) -> Unit, onTitleClick: (Long) -> Unit) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val bgStyle by viewModel.chatBackground.collectAsStateWithLifecycle()
     val pinnedMessage by viewModel.pinnedMessage.collectAsStateWithLifecycle()
@@ -494,7 +506,10 @@ fun ChatScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, o
             TopAppBar(
                 title = {
                     val chat = viewModel.chats.collectAsStateWithLifecycle().value.find { it.id == chatId }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { onTitleClick(chatId) }
+                    ) {
                         val avatarPath = chat?.photo?.small?.id?.let { downloadedFiles[it] }
                         if (avatarPath != null) {
                             AsyncImage(model = avatarPath, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
@@ -612,6 +627,171 @@ fun DateHeader(date: Int) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatInfoScreen(viewModel: TelegramViewModel, chatId: Long, onBack: () -> Unit, onMessageClick: (Long) -> Unit) {
+    val chats by viewModel.chats.collectAsStateWithLifecycle()
+    val fullInfo by viewModel.selectedChatFullInfo.collectAsStateWithLifecycle()
+    val basicGroups by viewModel.basicGroups.collectAsStateWithLifecycle()
+    val supergroups by viewModel.supergroups.collectAsStateWithLifecycle()
+    val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
+    val chat = remember(chats, chatId) { chats.find { it.id == chatId } }
+
+    LaunchedEffect(chatId) {
+        viewModel.loadChatFullInfo(chatId)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Dados do Grupo") },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Large Avatar
+            val avatarPath = chat?.photo?.big?.id?.let { downloadedFiles[it] } ?: chat?.photo?.small?.id?.let { downloadedFiles[it] }
+            if (avatarPath != null) {
+                AsyncImage(model = avatarPath, contentDescription = null, modifier = Modifier.size(120.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+            } else {
+                Surface(modifier = Modifier.size(120.dp).clip(CircleShape), color = MaterialTheme.colorScheme.primaryContainer) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(chat?.title?.take(1)?.uppercase() ?: "?", style = MaterialTheme.typography.displayMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(chat?.title ?: "Chat", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+
+            val membersText = when (val type = chat?.type) {
+                is TdApi.ChatTypeBasicGroup -> {
+                    val group = basicGroups[type.basicGroupId.toLong()]
+                    if (group != null) "${group.memberCount} membros" else "Grupo"
+                }
+                is TdApi.ChatTypeSupergroup -> {
+                    val sg = supergroups[type.supergroupId.toLong()]
+                    val suffix = if (type.isChannel) "inscritos" else "membros"
+                    if (sg != null) "${sg.memberCount} $suffix" else if (type.isChannel) "Canal" else "Supergrupo"
+                }
+                is TdApi.ChatTypePrivate -> "Privado"
+                else -> ""
+            }
+            Text(membersText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Action Grid
+            val isMuted = chat?.notificationSettings?.muteFor ?: 0 > 0
+            InfoActionGrid(
+                onMessage = { onMessageClick(chatId) },
+                onMute = { chat?.let { viewModel.toggleMute(it) } },
+                onLeave = {
+                    viewModel.leaveChat(chatId)
+                    onBack()
+                },
+                isMuted = isMuted,
+                onMembers = { /* Feature not requested yet */ },
+                onMedia = { /* Feature not requested yet */ },
+                onSaved = { /* Feature not requested yet */ },
+                onFiles = { /* Feature not requested yet */ },
+                onLinks = { /* Feature not requested yet */ }
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Description and Invite Link
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                val currentInfo = fullInfo
+                val description = when (currentInfo) {
+                    is TdApi.BasicGroupFullInfo -> currentInfo.description
+                    is TdApi.SupergroupFullInfo -> currentInfo.description
+                    else -> ""
+                }
+                if (description.isNotEmpty()) {
+                    InfoSection(title = "Descrição", content = description)
+                }
+
+                val inviteLink = when (currentInfo) {
+                    is TdApi.BasicGroupFullInfo -> currentInfo.inviteLink?.inviteLink
+                    is TdApi.SupergroupFullInfo -> currentInfo.inviteLink?.inviteLink
+                    else -> null
+                }
+                if (inviteLink != null) {
+                    InfoSection(title = "Link de Convite", content = inviteLink, isLink = true)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+fun InfoSection(title: String, content: String, isLink: Boolean = false) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = content,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (isLink) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                textDecoration = if (isLink) TextDecoration.Underline else null
+            )
+        }
+    }
+}
+
+@Composable
+fun InfoActionGrid(onMessage: () -> Unit, onMute: () -> Unit, onLeave: () -> Unit, isMuted: Boolean, onMembers: () -> Unit, onMedia: () -> Unit, onSaved: () -> Unit, onFiles: () -> Unit, onLinks: () -> Unit) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            InfoActionButton(Modifier.weight(1f), Icons.AutoMirrored.Filled.Chat, "Mensagem", onMessage)
+            InfoActionButton(Modifier.weight(1f), if (isMuted) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff, if (isMuted) "Ativar" else "Silenciar", onMute)
+            InfoActionButton(Modifier.weight(1f), Icons.Default.ExitToApp, "Sair", onLeave, isError = true)
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            InfoActionButton(Modifier.weight(1f), Icons.Default.People, "Membros", onMembers)
+            InfoActionButton(Modifier.weight(1f), Icons.Default.PermMedia, "Mídias", onMedia)
+            InfoActionButton(Modifier.weight(1f), Icons.Default.Bookmark, "Salvos", onSaved)
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            InfoActionButton(Modifier.weight(1f), Icons.Default.Description, "Arquivos", onFiles)
+            InfoActionButton(Modifier.weight(1f), Icons.Default.Link, "Links", onLinks)
+            Spacer(modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+fun InfoActionButton(modifier: Modifier, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit, isError: Boolean = false) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(80.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        contentColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
         }
     }
 }

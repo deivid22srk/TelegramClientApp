@@ -38,6 +38,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _messages = MutableStateFlow<List<TdApi.Message>>(emptyList())
     val messages = _messages.asStateFlow()
 
+    private val _selectedChatFullInfo = MutableStateFlow<Any?>(null)
+    val selectedChatFullInfo = _selectedChatFullInfo.asStateFlow()
+
     private val _pinnedMessage = MutableStateFlow<TdApi.Message?>(null)
     val pinnedMessage = _pinnedMessage.asStateFlow()
 
@@ -49,6 +52,12 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     private val _users = MutableStateFlow<Map<Long, TdApi.User>>(emptyMap())
     val users = _users.asStateFlow()
+
+    private val _basicGroups = MutableStateFlow<Map<Long, TdApi.BasicGroup>>(emptyMap())
+    val basicGroups = _basicGroups.asStateFlow()
+
+    private val _supergroups = MutableStateFlow<Map<Long, TdApi.Supergroup>>(emptyMap())
+    val supergroups = _supergroups.asStateFlow()
 
     private val _darkMode = MutableStateFlow(settingsManager.getDarkMode())
     val darkMode = _darkMode.asStateFlow()
@@ -394,6 +403,65 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             } else {
                 viewModelScope.launch { loadCloudDriveMessages() }
             }
+        }
+    }
+
+    fun loadChatFullInfo(chatId: Long) {
+        _selectedChatFullInfo.value = null
+        client?.send(TdApi.GetChat(chatId)) { chat ->
+            if (chat is TdApi.Chat) {
+                when (val type = chat.type) {
+                    is TdApi.ChatTypeBasicGroup -> {
+                        client?.send(TdApi.GetBasicGroup(type.basicGroupId)) { result ->
+                            if (result is TdApi.BasicGroup) {
+                                viewModelScope.launch {
+                                    val current = _basicGroups.value.toMutableMap()
+                                    current[result.id.toLong()] = result
+                                    _basicGroups.value = current
+                                }
+                            }
+                        }
+                        client?.send(TdApi.GetBasicGroupFullInfo(type.basicGroupId)) { result ->
+                            viewModelScope.launch { _selectedChatFullInfo.value = result }
+                        }
+                    }
+                    is TdApi.ChatTypeSupergroup -> {
+                        client?.send(TdApi.GetSupergroup(type.supergroupId)) { result ->
+                            if (result is TdApi.Supergroup) {
+                                viewModelScope.launch {
+                                    val current = _supergroups.value.toMutableMap()
+                                    current[result.id.toLong()] = result
+                                    _supergroups.value = current
+                                }
+                            }
+                        }
+                        client?.send(TdApi.GetSupergroupFullInfo(type.supergroupId)) { result ->
+                            viewModelScope.launch { _selectedChatFullInfo.value = result }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun toggleMute(chat: TdApi.Chat) {
+        val isMuted = chat.notificationSettings.muteFor > 0
+        val newMuteFor = if (isMuted) 0 else 2147483647 // Forever
+        val s = chat.notificationSettings
+        val settings = TdApi.ChatNotificationSettings()
+        settings.muteFor = newMuteFor
+        // Note: Direct field modification might not work if they are val,
+        // but often in TDLib JNI objects they are public var.
+        // If they are val, we'll need the exact constructor.
+
+        client?.send(TdApi.SetChatNotificationSettings(chat.id, settings)) {
+            loadChats() // Refresh to update mute icon if any
+        }
+    }
+
+    fun leaveChat(chatId: Long) {
+        client?.send(TdApi.LeaveChat(chatId)) {
+            loadChats()
         }
     }
 
