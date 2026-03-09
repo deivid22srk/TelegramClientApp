@@ -408,7 +408,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         } else {
             _isLoadingContent.value = true
         }
-        client?.send(TdApi.GetChatHistory(chatId, fromMessageId, 0, 50, false)) { result ->
+        client?.send(TdApi.GetChatHistory(chatId, fromMessageId, 0, 100, false)) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
                     val newMessages = result.messages.toList()
@@ -460,6 +460,10 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         fileIds.forEach { id -> client?.send(TdApi.DownloadFile(id, 1, 0, 0, false)) { } }
     }
 
+    fun loadSender(userId: Long) {
+        fetchSenderInfo(TdApi.MessageSenderUser(userId))
+    }
+
     fun loadVideos(chatId: Long) {
         _messages.value = emptyList()
         _isLoadingContent.value = true
@@ -496,6 +500,10 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             }
             caption.startsWith("/$oldName/")
         }
+
+        if (messagesToUpdate.isEmpty()) return
+
+        var remaining = messagesToUpdate.size
         messagesToUpdate.forEach { msg ->
             val oldCaption = when (val content = msg.content) {
                 is TdApi.MessageDocument -> content.caption.text
@@ -503,12 +511,19 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 else -> ""
             }
             val newCaption = oldCaption.replaceFirst("/$oldName/", "/$newName/")
+            val handler = Client.ResultHandler {
+                synchronized(this) {
+                    remaining--
+                    if (remaining == 0) {
+                        viewModelScope.launch { loadCloudDriveMessages() }
+                    }
+                }
+            }
             when (val content = msg.content) {
-                is TdApi.MessageDocument -> client?.send(TdApi.EditMessageCaption(chatId, msg.id, null, TdApi.FormattedText(newCaption, emptyArray()), false)) { }
-                is TdApi.MessageText -> client?.send(TdApi.EditMessageText(chatId, msg.id, null, TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false))) { }
+                is TdApi.MessageDocument -> client?.send(TdApi.EditMessageCaption(chatId, msg.id, null, TdApi.FormattedText(newCaption, emptyArray()), false), handler)
+                is TdApi.MessageText -> client?.send(TdApi.EditMessageText(chatId, msg.id, null, TdApi.InputMessageText(TdApi.FormattedText(newCaption, emptyArray()), null, false)), handler)
             }
         }
-        viewModelScope.launch { loadCloudDriveMessages() }
     }
 
     fun deleteCloudDriveFolder(folderName: String) {

@@ -636,7 +636,7 @@ fun AnimatedChatBackground(style: String, isDark: Boolean) {
         }
         else -> {
             val colors = if (isDark) {
-                listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surfaceVariant)
+                listOf(Color(0xFF0F0F0F), Color(0xFF000000))
             } else {
                 listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), MaterialTheme.colorScheme.surface)
             }
@@ -652,6 +652,12 @@ fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downlo
     val isOutgoing = message.isOutgoing
     val senderId = (message.senderId as? TdApi.MessageSenderUser)?.userId
     val sender = senderId?.let { users[it] }
+
+    if (!isOutgoing && senderId != null && sender == null) {
+        LaunchedEffect(senderId) {
+            viewModel.loadSender(senderId)
+        }
+    }
 
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = if (isLastInGroup) 4.dp else 1.dp), horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
         if (!isOutgoing) {
@@ -716,6 +722,24 @@ fun ChatMessageItem(viewModel: TelegramViewModel, message: TdApi.Message, downlo
                             ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                         }
                     }
+                    is TdApi.MessageAnimation -> {
+                        VideoMessageContent(content.animation, downloadedFiles, onVideoClick)
+                        if (content.caption.text.isNotEmpty()) {
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    is TdApi.MessageAudio -> {
+                        AudioMessageContent(viewModel, content.audio, downloadedFiles)
+                        if (content.caption.text.isNotEmpty()) {
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    is TdApi.MessageVoiceNote -> {
+                        VoiceNoteMessageContent(viewModel, content.voiceNote, downloadedFiles)
+                        if (content.caption.text.isNotEmpty()) {
+                            ClickableFormattedText(content.caption, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
                     else -> { Text("Mensagem não suportada", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
                 }
                 Text(text = android.text.format.DateFormat.format("HH:mm", message.date.toLong() * 1000).toString(), style = MaterialTheme.typography.labelSmall, color = if (isOutgoing) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.align(Alignment.End).padding(top = 2.dp))
@@ -729,6 +753,7 @@ fun VideoMessageContent(video: Any, downloadedFiles: Map<Int, String>, onVideoCl
     val (fileId, thumbnail, fileName, duration) = when (video) {
         is TdApi.Video -> Quadruple(video.video.id, video.thumbnail, video.fileName, video.duration)
         is TdApi.Document -> Quadruple(video.document.id, video.thumbnail, video.fileName, 0)
+        is TdApi.Animation -> Quadruple(video.animation.id, video.thumbnail, video.fileName, video.duration)
         else -> Quadruple(0, null, "", 0)
     }
     val thumbPath = thumbnail?.file?.id?.let { downloadedFiles[it] }
@@ -774,6 +799,44 @@ fun PhotoMessageContent(photo: TdApi.Photo, downloadedFiles: Map<Int, String>) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
             }
         }
+    }
+}
+
+@Composable
+fun AudioMessageContent(viewModel: TelegramViewModel, audio: TdApi.Audio, downloadedFiles: Map<Int, String>) {
+    val fileStatus by viewModel.fileStatus.collectAsStateWithLifecycle()
+    val status = fileStatus[audio.audio.id]
+    val isDownloaded = downloadedFiles.containsKey(audio.audio.id)
+    val isDownloading = status?.local?.isDownloadingActive == true
+
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)).padding(12.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().clickable { if (!isDownloaded && !isDownloading) viewModel.downloadFile(audio.audio.id, audio.fileName) }, verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.AudioFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(audio.title.ifEmpty { audio.fileName }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(audio.performer, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            }
+            if (isDownloading) {
+                IconButton(onClick = { viewModel.cancelDownload(audio.audio.id) }) { Icon(Icons.Default.Close, contentDescription = null) }
+            }
+        }
+        if (isDownloading && status != null) {
+            val progress = status.local.downloadedSize.toFloat() / status.expectedSize
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+        }
+    }
+}
+
+@Composable
+fun VoiceNoteMessageContent(viewModel: TelegramViewModel, voiceNoteData: TdApi.VoiceNote, downloadedFiles: Map<Int, String>) {
+    val fileId = voiceNoteData.voice.id
+    val isDownloaded = downloadedFiles.containsKey(fileId)
+    Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { if (!isDownloaded) viewModel.downloadFile(fileId, "voice_note.ogg") }) {
+            Icon(if (isDownloaded) Icons.Default.PlayArrow else Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        }
+        Text("Mensagem de Voz (${voiceNoteData.duration}s)", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
