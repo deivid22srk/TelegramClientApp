@@ -147,7 +147,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // constructor(chatId: Long, query: String?, senderId: TdApi.MessageSender?, fromMessageId: Long, offset: Int, limit: Int, filter: TdApi.SearchMessagesFilter?, messageThreadId: Long): TdApi.SearchChatMessages
+        // Correct 8-parameter order: chat_id, query, sender_id, from_message_id, offset, limit, filter, message_thread_id
         client?.send(TdApi.SearchChatMessages(
             chatId, 
             "", // query
