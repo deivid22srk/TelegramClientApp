@@ -119,21 +119,21 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                 val chatList = mutableListOf<TdApi.Chat>()
                 if (chatIds.isEmpty()) {
                     viewModelScope.launch { _isLoadingContent.value = false }
-                    return@GetChats
-                }
-                var count = 0
-                chatIds.forEach { chatId ->
-                    client?.send(TdApi.GetChat(chatId)) { chat ->
-                        if (chat is TdApi.Chat) {
-                            synchronized(chatList) { chatList.add(chat) }
-                        }
-                        count++
-                        if (count == chatIds.size) {
-                            viewModelScope.launch {
-                                _chats.value = chatList.filter { 
-                                    it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup 
+                } else {
+                    var count = 0
+                    chatIds.forEach { chatId ->
+                        client?.send(TdApi.GetChat(chatId)) { chat ->
+                            if (chat is TdApi.Chat) {
+                                synchronized(chatList) { chatList.add(chat) }
+                            }
+                            count++
+                            if (count == chatIds.size) {
+                                viewModelScope.launch {
+                                    _chats.value = chatList.filter { 
+                                        it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup 
+                                    }
+                                    _isLoadingContent.value = false
                                 }
-                                _isLoadingContent.value = false
                             }
                         }
                     }
@@ -147,16 +147,18 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // constructor(p0: Long, p1: TdApi.MessageTopic!, p2: String!, p3: TdApi.MessageSender!, p4: Long, p5: Int, p6: Int, p7: TdApi.SearchMessagesFilter!): TdApi.SearchChatMessages
+        // 10 parameters SearchChatMessages constructor
         client?.send(TdApi.SearchChatMessages(
             chatId, 
-            null, // filterTopic
             "", // query
+            null, // filterTopic
             null, // sender
             0, // fromMessageId
             0, // offset
             100, // limit
-            TdApi.SearchMessagesFilterVideo() // filter
+            TdApi.SearchMessagesFilterVideo(), // filter
+            0, // minDate
+            0 // maxDate
         )) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
