@@ -38,6 +38,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _isLoadingContent = MutableStateFlow(false)
     val isLoadingContent = _isLoadingContent.asStateFlow()
 
+    private val _downloadedFiles = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val downloadedFiles = _downloadedFiles.asStateFlow()
+
     var client: Client? = null
     private var appId: Int = 0
     private var apiHash: String = ""
@@ -73,14 +76,25 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private fun createClient() {
         if (client != null) return
         client = Client.create(
-            { result -> 
-                if (result is TdApi.UpdateAuthorizationState) {
-                    onAuthStateUpdated(result.authorizationState)
+            { result ->
+                when (result) {
+                    is TdApi.UpdateAuthorizationState -> onAuthStateUpdated(result.authorizationState)
+                    is TdApi.UpdateFile -> onUpdateFile(result.file)
                 }
             },
             { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") },
             { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") }
         )
+    }
+
+    private fun onUpdateFile(file: TdApi.File) {
+        if (file.local.isDownloadingCompleted) {
+            viewModelScope.launch {
+                val current = _downloadedFiles.value.toMutableMap()
+                current[file.id] = file.local.path
+                _downloadedFiles.value = current
+            }
+        }
     }
 
     private fun onAuthStateUpdated(state: TdApi.AuthorizationState) {
@@ -143,12 +157,20 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                         client?.send(TdApi.GetChat(chatId)) { chat ->
                             if (chat is TdApi.Chat) {
                                 synchronized(chatList) { chatList.add(chat) }
+                                // Request avatar download
+                                chat.photo?.small?.let { file ->
+                                    if (!file.local.isDownloadingCompleted) {
+                                        client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
+                                    } else {
+                                        onUpdateFile(file)
+                                    }
+                                }
                             }
                             count++
                             if (count == chatIds.size) {
                                 viewModelScope.launch {
-                                    _chats.value = chatList.filter { 
-                                        it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup 
+                                    _chats.value = chatList.filter {
+                                        it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup
                                     }
                                     _isLoadingContent.value = false
                                 }

@@ -1,10 +1,13 @@
 package com.example.telegramclient
 
+import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
 class TdLibDataSource(
@@ -15,59 +18,91 @@ class TdLibDataSource(
     private var dataSpec: DataSpec? = null
     private var opened = false
     private var bytesRemaining: Long = 0
+    private var totalFileSize: Long = C.LENGTH_UNSET.toLong()
+    private var currentPosition: Long = 0
 
     override fun open(dataSpec: DataSpec): Long {
         this.dataSpec = dataSpec
         val position = dataSpec.position
+
+        // First, get file info to know total size
+        val latch = CountDownLatch(1)
+        client.send(TdApi.GetFile(fileId)) { result ->
+            if (result is TdApi.File) {
+                totalFileSize = result.size
+            }
+            latch.countDown()
+        }
+        latch.await(2, TimeUnit.SECONDS)
+
         val length = if (dataSpec.length == C.LENGTH_UNSET.toLong()) {
-            C.LENGTH_UNSET.toLong() 
+            if (totalFileSize != C.LENGTH_UNSET.toLong()) totalFileSize - position else C.LENGTH_UNSET.toLong()
         } else {
             dataSpec.length
         }
 
-        // TdApi.DownloadFile(int fileId, int priority, long offset, long limit, boolean synchronous)
+        Log.d("TdLibDataSource", "Opening file $fileId at $position, length $length (total $totalFileSize)")
+
+        // Request TDLib to start downloading this part
+        // priority 32 is high for streaming
         client.send(TdApi.DownloadFile(fileId, 32, position, if (length == C.LENGTH_UNSET.toLong()) 0L else length, false)) { }
 
         opened = true
         transferStarted(dataSpec)
         bytesRemaining = length
-        return if (length == C.LENGTH_UNSET.toLong()) C.LENGTH_UNSET.toLong() else length
+        currentPosition = position
+        return length
     }
 
     override fun read(buffer: ByteArray, offset: Int, readLength: Int): Int {
         if (readLength == 0) return 0
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
 
-        val currentPosition = dataSpec!!.position + (if (dataSpec!!.length != C.LENGTH_UNSET.toLong()) (dataSpec!!.length - bytesRemaining) else 0L)
-        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) min(readLength.toLong(), bytesRemaining) else readLength.toLong()
-
-        var bytesRead = 0
-        val lock = Object()
-        var resultData: ByteArray? = null
-
-        // TdApi.ReadFilePart(int fileId, long offset, long count)
-        client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
-            if (result is TdApi.Data) {
-                resultData = result.data
-            }
-            synchronized(lock) { lock.notify() }
+        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) {
+            min(readLength.toLong(), bytesRemaining)
+        } else {
+            readLength.toLong()
         }
 
-        synchronized(lock) {
-            if (resultData == null) lock.wait(1000) 
+        var bytesRead = 0
+        var resultData: ByteArray? = null
+
+        // We might need to retry if the part isn't downloaded yet
+        var attempts = 0
+        while (resultData == null && attempts < 5) {
+            val latch = CountDownLatch(1)
+            client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
+                if (result is TdApi.Data) {
+                    resultData = result.data
+                } else {
+                    // If failed, make sure the file is still being downloaded
+                    client.send(TdApi.DownloadFile(fileId, 32, currentPosition, countToRead, false)) { }
+                }
+                latch.countDown()
+            }
+            latch.await(1, TimeUnit.SECONDS)
+            if (resultData == null) {
+                attempts++
+                Log.w("TdLibDataSource", "Read failed for $fileId at $currentPosition, attempt $attempts")
+            }
         }
 
         resultData?.let {
             val actualRead = min(it.size.toLong(), countToRead).toInt()
             System.arraycopy(it, 0, buffer, offset, actualRead)
             bytesRead = actualRead
+
+            currentPosition += actualRead
             if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
                 bytesRemaining -= actualRead
+            } else if (totalFileSize != C.LENGTH_UNSET.toLong()) {
+                // If length was unset, we check against total size
+                if (currentPosition >= totalFileSize) bytesRemaining = 0
             }
             bytesTransferred(actualRead)
         }
 
-        return if (bytesRead > 0) bytesRead else 0
+        return if (bytesRead > 0) bytesRead else C.RESULT_END_OF_INPUT
     }
 
     override fun getUri() = dataSpec?.uri
