@@ -24,7 +24,9 @@ sealed class AuthState {
 
 class TelegramViewModel(application: Application) : AndroidViewModel(application) {
     
-    private val _authState = MutableStateFlow<AuthState>(AuthState.EnterCredentials)
+    private val settingsManager = SettingsManager(application)
+    
+    private val _authState = MutableStateFlow<AuthState>(AuthState.Initial)
     val authState = _authState.asStateFlow()
 
     private val _chats = MutableStateFlow<List<TdApi.Chat>>(emptyList())
@@ -36,19 +38,31 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _isLoadingContent = MutableStateFlow(false)
     val isLoadingContent = _isLoadingContent.asStateFlow()
 
-    private var client: Client? = null
+    var client: Client? = null
     private var appId: Int = 0
     private var apiHash: String = ""
     private val appDir: String = application.filesDir.absolutePath + "/tdlib"
 
     init {
         File(appDir).mkdirs()
+        checkSavedCredentials()
+    }
+
+    private fun checkSavedCredentials() {
+        val savedId = settingsManager.getAppId()
+        val savedHash = settingsManager.getApiHash()
+        if (savedId != null && savedHash != null) {
+            initializeClient(savedId, savedHash)
+        } else {
+            _authState.value = AuthState.EnterCredentials
+        }
     }
 
     fun initializeClient(id: String, hash: String) {
         try {
             this.appId = id.toInt()
             this.apiHash = hash
+            settingsManager.saveCredentials(id, hash)
             _authState.value = AuthState.Loading
             createClient()
         } catch (e: NumberFormatException) {
@@ -57,6 +71,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun createClient() {
+        if (client != null) return
         client = Client.create(
             { result -> 
                 if (result is TdApi.UpdateAuthorizationState) {
@@ -85,7 +100,10 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                     fetchMe()
                     loadChats()
                 }
-                is TdApi.AuthorizationStateClosed -> _authState.value = AuthState.EnterCredentials
+                is TdApi.AuthorizationStateClosed -> {
+                    client = null
+                    _authState.value = AuthState.EnterCredentials
+                }
                 else -> {}
             }
         }
@@ -94,14 +112,14 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun submitPhone(phone: String) {
         _authState.value = AuthState.Loading
         client?.send(TdApi.SetAuthenticationPhoneNumber(phone, null)) { result ->
-            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.EnterPhone }
+            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.Error(result.message) }
         }
     }
 
     fun submitCode(code: String) {
         _authState.value = AuthState.Loading
         client?.send(TdApi.CheckAuthenticationCode(code)) { result ->
-            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.EnterCode }
+            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.Error(result.message) }
         }
     }
 
@@ -113,7 +131,6 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun loadChats() {
         _isLoadingContent.value = true
-        // TdApi.GetChats(ChatList chatList, int limit)
         client?.send(TdApi.GetChats(TdApi.ChatListMain(), 100)) { result ->
             if (result is TdApi.Chats) {
                 val chatIds = result.chatIds
@@ -149,25 +166,29 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         _videos.value = emptyList()
         _isLoadingContent.value = true
         
-        // Constructor from error log: constructor(p0: Long, p1: TdApi.MessageTopic!, p2: String!, p3: TdApi.MessageSender!, p4: Long, p5: Int, p6: Int, p7: TdApi.SearchMessagesFilter!): TdApi.SearchChatMessages
-        // p0: chatId, p1: filterTopic, p2: query, p3: sender, p4: fromMessageId, p5: offset, p6: limit, p7: filter
-        client?.send(TdApi.SearchChatMessages(
-            chatId, 
-            null as TdApi.MessageTopic?,
-            "", 
-            null as TdApi.MessageSender?,
-            0L, 
-            0, 
-            100, 
-            TdApi.SearchMessagesFilterVideo()
-        )) { result ->
-            if (result is TdApi.Messages) {
-                viewModelScope.launch {
-                    _videos.value = result.messages.toList()
-                    _isLoadingContent.value = false
+        // Search for both Videos and Documents (since some videos are sent as files)
+        val messagesList = mutableListOf<TdApi.Message>()
+        var searchCount = 0
+        
+        val filters = listOf(TdApi.SearchMessagesFilterVideo(), TdApi.SearchMessagesFilterDocument())
+        
+        filters.forEach { filter ->
+            client?.send(TdApi.SearchChatMessages(
+                chatId, "", null as TdApi.MessageTopic?, null as TdApi.MessageSender?,
+                0L, 0, 100, filter, 0, 0
+            )) { result ->
+                if (result is TdApi.Messages) {
+                    synchronized(messagesList) {
+                        messagesList.addAll(result.messages)
+                    }
                 }
-            } else {
-                viewModelScope.launch { _isLoadingContent.value = false }
+                searchCount++
+                if (searchCount == filters.size) {
+                    viewModelScope.launch {
+                        _videos.value = messagesList.sortedByDescending { it.date }
+                        _isLoadingContent.value = false
+                    }
+                }
             }
         }
     }

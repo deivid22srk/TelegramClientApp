@@ -76,4 +76,10 @@ dependencies {
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.github.tdlibx:td-ktx:1.8.56")
+    
+    // Media3/ExoPlayer for streaming
+    val media3Version = "1.4.1"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
 }
