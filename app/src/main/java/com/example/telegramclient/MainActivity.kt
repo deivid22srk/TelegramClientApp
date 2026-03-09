@@ -7,6 +7,7 @@ import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +27,9 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
@@ -41,6 +45,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -241,8 +249,13 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
     var isEditingProfile by remember { mutableStateOf(false) }
 
     if (isEditingProfile) {
+        BackHandler { isEditingProfile = false }
         EditProfileScreen(viewModel, onBack = { isEditingProfile = false })
     } else if (selectedVideoFileId != null) {
+        BackHandler {
+            selectedVideoFileId = null
+            viewModel.isPlaybackActive.value = false
+        }
         VideoPlayerScreen(viewModel, selectedVideoFileId!!, isInPip, isFullscreen,
             onFullscreenToggle = onFullscreenToggle,
             onPipRequest = onPipRequest,
@@ -252,6 +265,7 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
             }
         )
     } else if (selectedChatId != null) {
+        BackHandler { selectedChatId = null }
         ChatScreen(viewModel, selectedChatId!!,
             onBack = { selectedChatId = null },
             onVideoClick = { selectedVideoFileId = it }
@@ -700,8 +714,24 @@ fun VideoPlayerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var showControls by remember { mutableStateOf(true) }
+    var isPlaying by remember { mutableStateOf(true) }
+    var currentPosition by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(isFullscreen) {
+        val window = (context as? android.app.Activity)?.window ?: return@LaunchedEffect
+        val controller = WindowCompat.getInsetsController(window, view)
+        if (isFullscreen) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     val exoPlayer = remember {
         viewModel.isPlaybackActive.value = true
@@ -711,12 +741,28 @@ fun VideoPlayerScreen(
             .build().apply {
                 val mediaItem = MediaItem.Builder()
                     .setUri("tdlib://file/$fileId")
-                    .setMimeType("video/mp4") // Defaulting to mp4 for TDLib streaming
                     .build()
                 setMediaItem(mediaItem)
                 prepare()
                 playWhenReady = true
+                addListener(object : androidx.media3.common.Player.Listener {
+                    override fun onIsPlayingChanged(isPlayingChanged: Boolean) {
+                        isPlaying = isPlayingChanged
+                    }
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == androidx.media3.common.Player.STATE_READY) {
+                            duration = this@apply.duration
+                        }
+                    }
+                })
             }
+    }
+
+    LaunchedEffect(exoPlayer) {
+        while (true) {
+            currentPosition = exoPlayer.currentPosition
+            kotlinx.coroutines.delay(500)
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -725,70 +771,112 @@ fun VideoPlayerScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            if (!isInPip && !isFullscreen) {
-                TopAppBar(
-                    title = { Text("Video Player", fontWeight = FontWeight.Bold) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = onPipRequest) {
-                            Icon(Icons.Default.PictureInPicture, contentDescription = "PiP", tint = Color.White)
-                        }
-                        IconButton(onClick = onFullscreenToggle) {
-                            Icon(
-                                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                contentDescription = "Fullscreen",
-                                tint = Color.White
-                            )
-                        }
-                        IconButton(onClick = {
-                            resizeMode = when (resizeMode) {
-                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                AspectRatioFrameLayout.RESIZE_MODE_FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            }
-                        }) {
-                            Icon(Icons.Default.AspectRatio, contentDescription = "Resize", tint = Color.White)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Black,
-                        titleContentColor = Color.White,
-                        navigationIconContentColor = Color.White
-                    )
-                )
-            }
-        },
-        containerColor = Color.Black
-    ) { padding ->
-        val actualPadding = if (isInPip || isFullscreen) PaddingValues(0.dp) else padding
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(actualPadding),
-            contentAlignment = Alignment.Center
-        ) {
-            AndroidView(
-                factory = {
-                    PlayerView(context).apply {
-                        player = exoPlayer
-                        useController = !isInPip
-                        setBackgroundColor(android.graphics.Color.BLACK)
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black).clickable { showControls = !showControls }) {
+        AndroidView(
+            factory = {
+                PlayerView(context).apply {
+                    player = exoPlayer
+                    useController = false
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                }
+            },
+            update = {
+                it.resizeMode = resizeMode
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (showControls && !isInPip) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
+                // Top Bar
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopStart),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = Color.White)
                     }
-                },
-                update = {
-                    it.resizeMode = resizeMode
-                    it.useController = !isInPip
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Reproduzindo Vídeo", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = onPipRequest) {
+                        Icon(Icons.Default.PictureInPicture, contentDescription = "PiP", tint = Color.White)
+                    }
+                    IconButton(onClick = {
+                        resizeMode = when (resizeMode) {
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                            AspectRatioFrameLayout.RESIZE_MODE_FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        }
+                    }) {
+                        Icon(Icons.Default.AspectRatio, contentDescription = "Redimensionar", tint = Color.White)
+                    }
+                    IconButton(onClick = onFullscreenToggle) {
+                        Icon(
+                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            contentDescription = "Tela Cheia",
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                // Center Controls
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                ) {
+                    IconButton(onClick = { exoPlayer.seekTo(currentPosition - 10000) }) {
+                        Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(48.dp))
+                    }
+
+                    Surface(
+                        onClick = { if (isPlaying) exoPlayer.pause() else exoPlayer.play() },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                        contentColor = Color.White
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pausar" else "Reproduzir",
+                            modifier = Modifier.padding(16.dp).size(48.dp)
+                        )
+                    }
+
+                    IconButton(onClick = { exoPlayer.seekTo(currentPosition + 10000) }) {
+                        Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(48.dp))
+                    }
+                }
+
+                // Bottom Controls
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp).align(Alignment.BottomCenter)
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(formatTime(currentPosition), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        Text(formatTime(duration), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Slider(
+                        value = currentPosition.toFloat(),
+                        onValueChange = { exoPlayer.seekTo(it.toLong()) },
+                        valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                        )
+                    )
+                }
+            }
         }
     }
+}
+
+fun formatTime(milliseconds: Long): String {
+    val totalSeconds = milliseconds / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
 }
 
 @Composable
