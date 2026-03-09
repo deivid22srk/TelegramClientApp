@@ -171,16 +171,16 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         val filters = listOf(TdApi.SearchMessagesFilterVideo(), TdApi.SearchMessagesFilterDocument())
         
         filters.forEach { filter ->
-            // SearchChatMessages(long chatId, String query, TdApi.MessageSender senderId, long fromMessageId, int offset, int limit, TdApi.SearchMessagesFilter filter, long messageThreadId)
+            // p0: chatId, p1: filterTopic (MessageTopic!), p2: query, p3: sender (MessageSender!), p4: fromMessageId, p5: offset, p6: limit, p7: filter
             client?.send(TdApi.SearchChatMessages(
                 chatId, 
+                null as TdApi.MessageTopic?,
                 "", 
                 null as TdApi.MessageSender?,
                 0L, 
                 0, 
                 100, 
-                filter,
-                0L
+                filter
             )) { result ->
                 if (result is TdApi.FoundChatMessages) {
                     synchronized(messagesList) {

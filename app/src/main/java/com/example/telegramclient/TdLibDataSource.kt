@@ -31,7 +31,7 @@ class TdLibDataSource(
         opened = true
         transferStarted(dataSpec)
         bytesRemaining = length
-        return length
+        return if (length == C.LENGTH_UNSET.toLong()) C.LENGTH_UNSET.toLong() else length
     }
 
     override fun read(buffer: ByteArray, offset: Int, readLength: Int): Int {
@@ -39,7 +39,7 @@ class TdLibDataSource(
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
 
         val currentPosition = dataSpec!!.position + (if (dataSpec!!.length != C.LENGTH_UNSET.toLong()) (dataSpec!!.length - bytesRemaining) else 0L)
-        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong()) min(readLength.toLong(), bytesRemaining).toInt() else readLength
+        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) min(readLength.toLong(), bytesRemaining).toInt() else readLength
 
         var bytesRead = 0
         val lock = Object()
