@@ -166,18 +166,23 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         _videos.value = emptyList()
         _isLoadingContent.value = true
         
-        // Search for both Videos and Documents (since some videos are sent as files)
         val messagesList = mutableListOf<TdApi.Message>()
         var searchCount = 0
-        
         val filters = listOf(TdApi.SearchMessagesFilterVideo(), TdApi.SearchMessagesFilterDocument())
         
         filters.forEach { filter ->
+            // SearchChatMessages(long chatId, String query, TdApi.MessageSender senderId, long fromMessageId, int offset, int limit, TdApi.SearchMessagesFilter filter, long messageThreadId)
             client?.send(TdApi.SearchChatMessages(
-                chatId, "", null as TdApi.MessageTopic?, null as TdApi.MessageSender?,
-                0L, 0, 100, filter, 0, 0
+                chatId, 
+                "", 
+                null as TdApi.MessageSender?,
+                0L, 
+                0, 
+                100, 
+                filter,
+                0L
             )) { result ->
-                if (result is TdApi.Messages) {
+                if (result is TdApi.FoundChatMessages) {
                     synchronized(messagesList) {
                         messagesList.addAll(result.messages)
                     }

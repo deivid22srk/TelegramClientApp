@@ -20,13 +20,13 @@ class TdLibDataSource(
         this.dataSpec = dataSpec
         val position = dataSpec.position
         val length = if (dataSpec.length == C.LENGTH_UNSET.toLong()) {
-            Long.MAX_VALUE 
+            C.LENGTH_UNSET.toLong() 
         } else {
             dataSpec.length
         }
 
-        // Prioritize downloading this part
-        client.send(TdApi.DownloadFile(fileId, 32, position.toInt(), length.toInt(), false)) { }
+        // TdApi.DownloadFile(int fileId, int priority, long offset, long limit, boolean synchronous)
+        client.send(TdApi.DownloadFile(fileId, 32, position, if (length == C.LENGTH_UNSET.toLong()) 0L else length, false)) { }
 
         opened = true
         transferStarted(dataSpec)
@@ -38,15 +38,15 @@ class TdLibDataSource(
         if (readLength == 0) return 0
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
 
-        val currentPosition = dataSpec!!.position + (dataSpec!!.length - bytesRemaining)
-        val countToRead = min(readLength.toLong(), bytesRemaining).toInt()
+        val currentPosition = dataSpec!!.position + (if (dataSpec!!.length != C.LENGTH_UNSET.toLong()) (dataSpec!!.length - bytesRemaining) else 0L)
+        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong()) min(readLength.toLong(), bytesRemaining).toInt() else readLength
 
         var bytesRead = 0
         val lock = Object()
         var resultData: ByteArray? = null
 
-        // Try to read the part. In a real app, we should wait for UpdateFile if not ready.
-        client.send(TdApi.ReadFilePart(fileId, currentPosition.toInt(), countToRead)) { result ->
+        // TdApi.ReadFilePart(int fileId, long offset, int count)
+        client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
             if (result is TdApi.FilePart) {
                 resultData = result.data
             }
@@ -54,15 +54,17 @@ class TdLibDataSource(
         }
 
         synchronized(lock) {
-            if (resultData == null) lock.wait(1000) // Wait up to 1s for data
+            if (resultData == null) lock.wait(1000) 
         }
 
         resultData?.let {
             val actualRead = min(it.size, countToRead)
             System.arraycopy(it, 0, buffer, offset, actualRead)
             bytesRead = actualRead
-            bytesRemaining -= actualRead
-            bytesTransferred(dataSpec!!, actualRead)
+            if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
+                bytesRemaining -= actualRead
+            }
+            bytesTransferred(actualRead)
         }
 
         return if (bytesRead > 0) bytesRead else 0
@@ -73,7 +75,7 @@ class TdLibDataSource(
     override fun close() {
         if (opened) {
             opened = false
-            transferEnded(dataSpec!!)
+            transferEnded()
         }
         dataSpec = null
     }
