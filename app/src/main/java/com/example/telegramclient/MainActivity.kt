@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Boolean, onFullscreenToggle: () -> Unit, onPipRequest: () -> Unit) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
@@ -126,32 +127,8 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
             is AuthState.EnterCode -> CodeScreen(viewModel)
             is AuthState.EnterPassword -> ErrorScreen("Password required") { }
             is AuthState.LoggedIn -> {
-                Scaffold(
-                    bottomBar = {
-                        NavigationBar {
-                            NavigationBarItem(
-                                icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chats") },
-                                label = { Text("Chats") },
-                                selected = currentTab == 0,
-                                onClick = { currentTab = 0 }
-                            )
-                            NavigationBarItem(
-                                icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-                                label = { Text("Profile") },
-                                selected = currentTab == 1,
-                                onClick = { currentTab = 1 }
-                            )
-                        }
-                    }
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding)) {
-                        if (currentTab == 0) {
-                            GroupsScreen(viewModel) { selectedChatId = it }
-                        } else {
-                            SettingsScreen(viewModel)
-                        }
-                    }
-                }
+                LoggedInMainScreen(viewModel, currentTab, onTabChange = { currentTab = it },
+                    onGroupClick = { selectedChatId = it })
             }
             is AuthState.Error -> ErrorScreen(state.message) { 
                 // Basic way to reset
@@ -160,107 +137,138 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoadingContent.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            LargeTopAppBar(
-                title = { Text("Conversas", fontWeight = FontWeight.ExtraBold) },
-                colors = TopAppBarDefaults.largeTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp)
-                )
-            )
+    if (isLoading && chats.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(strokeWidth = 3.dp)
         }
-    ) { padding ->
-        if (isLoading && chats.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(strokeWidth = 3.dp)
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(vertical = 8.dp),
-            ) {
-                items(chats, key = { it.id }) { chat ->
-                    val avatarPath = chat.photo?.small?.id?.let { downloadedFiles[it] }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(chats, key = { it.id }) { chat ->
+                val avatarPath = chat.photo?.small?.id?.let { downloadedFiles[it] }
 
-                    ListItem(
-                        modifier = Modifier
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable {
-                                viewModel.loadChatHistory(chat.id)
-                                onGroupClick(chat.id)
-                            },
-                        leadingContent = {
-                            if (avatarPath != null) {
-                                AsyncImage(
-                                    model = avatarPath,
-                                    contentDescription = "Group Avatar",
-                                    modifier = Modifier.size(56.dp).clip(CircleShape),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Surface(
-                                    modifier = Modifier.size(56.dp).clip(CircleShape),
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            chat.title.take(1).uppercase(),
-                                            style = MaterialTheme.typography.titleLarge,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-                                }
-                            }
+                ListItem(
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable {
+                            viewModel.loadChatHistory(chat.id)
+                            onGroupClick(chat.id)
                         },
-                        headlineContent = {
-                            Text(chat.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
-                        },
-                        supportingContent = {
-                            val lastMsgText = when (val content = chat.lastMessage?.content) {
-                                is TdApi.MessageText -> content.text.text
-                                is TdApi.MessageVideo -> "🎥 Vídeo"
-                                is TdApi.MessagePhoto -> "🖼️ Foto"
-                                is TdApi.MessageAnimation -> "GIF"
-                                is TdApi.MessageAudio -> "🎵 Áudio"
-                                is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
-                                is TdApi.MessageDocument -> "📄 Documento"
-                                else -> "Mensagem"
-                            }
-                            Text(
-                                lastMsgText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    leadingContent = {
+                        if (avatarPath != null) {
+                            AsyncImage(
+                                model = avatarPath,
+                                contentDescription = "Group Avatar",
+                                modifier = Modifier.size(56.dp).clip(CircleShape),
+                                contentScale = ContentScale.Crop
                             )
-                        },
-                        trailingContent = {
-                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                chat.lastMessage?.let { lastMsg ->
+                        } else {
+                            Surface(
+                                modifier = Modifier.size(56.dp).clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
                                     Text(
-                                        text = android.text.format.DateFormat.format("HH:mm", lastMsg.date.toLong() * 1000).toString(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
+                                        chat.title.take(1).uppercase(),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                 }
-                                if (chat.unreadCount > 0) {
-                                    Badge(containerColor = MaterialTheme.colorScheme.primary) {
-                                        Text("${chat.unreadCount}", color = MaterialTheme.colorScheme.onPrimary)
-                                    }
+                            }
+                        }
+                    },
+                    headlineContent = {
+                        Text(chat.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                    },
+                    supportingContent = {
+                        val lastMsgText = when (val content = chat.lastMessage?.content) {
+                            is TdApi.MessageText -> content.text.text
+                            is TdApi.MessageVideo -> "🎥 Vídeo"
+                            is TdApi.MessagePhoto -> "🖼️ Foto"
+                            is TdApi.MessageAnimation -> "GIF"
+                            is TdApi.MessageAudio -> "🎵 Áudio"
+                            is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
+                            is TdApi.MessageDocument -> "📄 Documento"
+                            else -> "Mensagem"
+                        }
+                        Text(
+                            lastMsgText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            chat.lastMessage?.let { lastMsg ->
+                                Text(
+                                    text = android.text.format.DateFormat.format("HH:mm", lastMsg.date.toLong() * 1000).toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            if (chat.unreadCount > 0) {
+                                Badge(containerColor = MaterialTheme.colorScheme.primary) {
+                                    Text("${chat.unreadCount}", color = MaterialTheme.colorScheme.onPrimary)
                                 }
                             }
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                    )
-                }
+                        }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChange: (Int) -> Unit, onGroupClick: (Long) -> Unit) {
+    Scaffold(
+        topBar = {
+            val title = if (currentTab == 0) "Conversas" else "Meu Perfil"
+            TopAppBar(
+                title = { Text(title, fontWeight = FontWeight.ExtraBold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        },
+        bottomBar = {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.background,
+                tonalElevation = 0.dp
+            ) {
+                NavigationBarItem(
+                    icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chats") },
+                    label = { Text("Chats") },
+                    selected = currentTab == 0,
+                    onClick = { onTabChange(0) }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
+                    label = { Text("Profile") },
+                    selected = currentTab == 1,
+                    onClick = { onTabChange(1) }
+                )
+            }
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            if (currentTab == 0) {
+                GroupsScreen(viewModel, onGroupClick)
+            } else {
+                SettingsScreen(viewModel)
             }
         }
     }
@@ -782,95 +790,82 @@ fun ErrorScreen(message: String, onRetry: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: TelegramViewModel) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("Meu Perfil", fontWeight = FontWeight.ExtraBold) },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        }
-    ) { padding ->
-        val user = (authState as? AuthState.LoggedIn)?.user
-        if (user != null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+    val user = (authState as? AuthState.LoggedIn)?.user
+    if (user != null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val avatarPath = user.profilePhoto?.small?.id?.let { downloadedFiles[it] }
+
+            Surface(
+                modifier = Modifier.size(120.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                tonalElevation = 4.dp
             ) {
-                val avatarPath = user.profilePhoto?.small?.id?.let { downloadedFiles[it] }
-
-                Surface(
-                    modifier = Modifier.size(120.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    tonalElevation = 4.dp
-                ) {
-                    if (avatarPath != null) {
-                        AsyncImage(
-                            model = avatarPath,
-                            contentDescription = "Foto de Perfil",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
+                if (avatarPath != null) {
+                    AsyncImage(
+                        model = avatarPath,
+                        contentDescription = "Foto de Perfil",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = user.firstName.take(1).uppercase(),
+                            style = MaterialTheme.typography.displayMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
-                    } else {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = user.firstName.take(1).uppercase(),
-                                style = MaterialTheme.typography.displayMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-                Text(
-                    text = "${user.firstName} ${user.lastName}".trim(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
+            Text(
+                text = "${user.firstName} ${user.lastName}".trim(),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
 
-                Text(
-                    text = if (user.phoneNumber != null) "+${user.phoneNumber}" else "Telefone não disponível",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            Text(
+                text = if (user.phoneNumber != null) "+${user.phoneNumber}" else "Telefone não disponível",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
 
-                Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(48.dp))
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        ProfileInfoItem(Icons.Default.Person, "Nome de usuário", user.usernames?.activeUsernames?.firstOrNull() ?: "Não definido")
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                        ProfileInfoItem(Icons.Default.Settings, "Configurações da Conta", "Privacidade, Notificações...")
-                    }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    ProfileInfoItem(Icons.Default.Person, "Nome de usuário", user.usernames?.activeUsernames?.firstOrNull() ?: "Não definido")
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    ProfileInfoItem(Icons.Default.Settings, "Configurações da Conta", "Privacidade, Notificações...")
                 }
+            }
 
-                Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.weight(1f))
 
-                Button(
-                    onClick = { /* Implement logout if needed */ },
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-                ) {
-                    Text("Sair da Conta", fontWeight = FontWeight.Bold)
-                }
+            Button(
+                onClick = { /* Implement logout if needed */ },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
+            ) {
+                Text("Sair da Conta", fontWeight = FontWeight.Bold)
             }
         }
     }
