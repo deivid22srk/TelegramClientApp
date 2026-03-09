@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -44,10 +43,22 @@ android {
     buildFeatures {
         compose = true
     }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        force("org.jetbrains.kotlin:kotlin-stdlib:1.9.24")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24")
+        force("org.jetbrains.kotlin:kotlin-reflect:1.9.24")
     }
 }
 
@@ -65,5 +76,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("com.github.tdlibx:td-ktx:1.8.56")
+    // Downgrading td-ktx slightly to be safe
+    implementation("com.github.tdlibx:td-ktx:1.8.21")
 }
