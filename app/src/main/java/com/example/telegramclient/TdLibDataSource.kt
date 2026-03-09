@@ -39,13 +39,13 @@ class TdLibDataSource(
         if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
 
         val currentPosition = dataSpec!!.position + (if (dataSpec!!.length != C.LENGTH_UNSET.toLong()) (dataSpec!!.length - bytesRemaining) else 0L)
-        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) min(readLength.toLong(), bytesRemaining).toInt() else readLength
+        val countToRead = if (bytesRemaining != C.LENGTH_UNSET.toLong() && bytesRemaining > 0) min(readLength.toLong(), bytesRemaining) else readLength.toLong()
 
         var bytesRead = 0
         val lock = Object()
         var resultData: ByteArray? = null
 
-        // TdApi.ReadFilePart(int fileId, long offset, int count)
+        // TdApi.ReadFilePart(int fileId, long offset, long count)
         client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
             if (result is TdApi.FilePart) {
                 resultData = result.data
@@ -58,7 +58,7 @@ class TdLibDataSource(
         }
 
         resultData?.let {
-            val actualRead = min(it.size, countToRead)
+            val actualRead = min(it.size, countToRead.toInt())
             System.arraycopy(it, 0, buffer, offset, actualRead)
             bytesRead = actualRead
             if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
