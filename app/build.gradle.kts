@@ -84,4 +84,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
+
+    // VLC Player
+    implementation("org.videolan.android:libvlc-all:3.6.0")
 }

@@ -28,4 +28,7 @@ class SettingsManager(context: Context) {
 
     fun saveDownloadPath(path: String) = prefs.edit().putString("download_path", path).apply()
     fun getDownloadPath(): String? = prefs.getString("download_path", null)
+
+    fun saveVideoPlayer(player: String) = prefs.edit().putString("video_player", player).apply()
+    fun getVideoPlayer(): String = prefs.getString("video_player", "ExoPlayer") ?: "ExoPlayer"
 }

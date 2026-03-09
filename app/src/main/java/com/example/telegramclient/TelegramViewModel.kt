@@ -29,6 +29,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _authState = MutableStateFlow<AuthState>(AuthState.Initial)
     val authState = _authState.asStateFlow()
 
+    private val _connectionState = MutableStateFlow<TdApi.ConnectionState>(TdApi.ConnectionStateConnecting())
+    val connectionState = _connectionState.asStateFlow()
+
     private val _chats = MutableStateFlow<List<TdApi.Chat>>(emptyList())
     val chats = _chats.asStateFlow()
 
@@ -56,6 +59,9 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _downloadPath = MutableStateFlow(settingsManager.getDownloadPath())
     val downloadPath = _downloadPath.asStateFlow()
 
+    private val _videoPlayer = MutableStateFlow(settingsManager.getVideoPlayer())
+    val videoPlayer = _videoPlayer.asStateFlow()
+
     private val _cloudDriveChatId = MutableStateFlow(settingsManager.getCloudDriveChatId())
     val cloudDriveChatId = _cloudDriveChatId.asStateFlow()
 
@@ -77,7 +83,12 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             is TdApi.UpdateMessageContent -> onMessageContentUpdated(result.chatId, result.messageId, result.newContent)
             is TdApi.UpdateChatLastMessage -> onChatLastMessageUpdated(result.chatId, result.lastMessage)
             is TdApi.UpdateChatPosition -> onChatPositionUpdated(result.chatId, result.position)
+            is TdApi.UpdateConnectionState -> onConnectionStateUpdated(result.state)
         }
+    }
+
+    private fun onConnectionStateUpdated(state: TdApi.ConnectionState) {
+        _connectionState.value = state
     }
 
     private val downloadingFiles = mutableMapOf<Int, String>()
@@ -443,6 +454,11 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun updateDownloadPath(path: String) {
         _downloadPath.value = path
         settingsManager.saveDownloadPath(path)
+    }
+
+    fun updateVideoPlayer(player: String) {
+        _videoPlayer.value = player
+        settingsManager.saveVideoPlayer(player)
     }
 
     fun setCloudDriveChatId(chatId: Long) {
