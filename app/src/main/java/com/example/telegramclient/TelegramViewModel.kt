@@ -11,10 +11,9 @@ import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
 import java.io.File
 
-// Define UI States
 sealed class AuthState {
     object Initial : AuthState()
-    object EnterCredentials : AuthState() // App ID, Hash
+    object EnterCredentials : AuthState()
     object Loading : AuthState()
     object EnterPhone : AuthState()
     object EnterCode : AuthState()
@@ -28,46 +27,44 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _authState = MutableStateFlow<AuthState>(AuthState.EnterCredentials)
     val authState = _authState.asStateFlow()
 
+    private val _chats = MutableStateFlow<List<TdApi.Chat>>(emptyList())
+    val chats = _chats.asStateFlow()
+
+    private val _videos = MutableStateFlow<List<TdApi.Message>>(emptyList())
+    val videos = _videos.asStateFlow()
+
+    private val _isLoadingContent = MutableStateFlow(false)
+    val isLoadingContent = _isLoadingContent.asStateFlow()
+
     private var client: Client? = null
-    
-    // User credentials
     private var appId: Int = 0
     private var apiHash: String = ""
-    private var phoneNumber: String = ""
-
-    // Path for TDLib database
     private val appDir: String = application.filesDir.absolutePath + "/tdlib"
 
     init {
-        // Prepare directory
         File(appDir).mkdirs()
     }
 
-    // Step 1: Initialize Client with App ID / Hash
     fun initializeClient(id: String, hash: String) {
         try {
             this.appId = id.toInt()
             this.apiHash = hash
             _authState.value = AuthState.Loading
-            
             createClient()
         } catch (e: NumberFormatException) {
-            _authState.value = AuthState.Error("Invalid App ID (must be number)")
+            _authState.value = AuthState.Error("Invalid App ID")
         }
     }
 
     private fun createClient() {
-        // Create new client. We use the raw Client class for control, 
-        // relying on the library to provide the native link.
         client = Client.create(
             { result -> 
-                // Handle updates
                 if (result is TdApi.UpdateAuthorizationState) {
                     onAuthStateUpdated(result.authorizationState)
                 }
             },
-            { e -> Log.e("Telegram", "Exception: ${e.localizedMessage}") },
-            { e -> Log.e("Telegram", "Exception: ${e.localizedMessage}") }
+            { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") },
+            { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") }
         )
     }
 
@@ -76,74 +73,85 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             when (state) {
                 is TdApi.AuthorizationStateWaitTdlibParameters -> {
                     client?.send(TdApi.SetTdlibParameters(
-                        false, // useTestDc
-                        appDir, // databaseDirectory
-                        appDir + "/files", // filesDirectory
-                        ByteArray(0), // databaseEncryptionKey
-                        true, // useFileDatabase
-                        true, // useChatInfoDatabase
-                        true, // useMessageDatabase
-                        true, // useSecretChats
-                        appId,
-                        apiHash,
-                        "en", // systemLanguageCode
-                        "Android", // deviceModel
-                        "Example", // systemVersion
-                        "1.0" // applicationVersion
+                        false, appDir, appDir + "/files", ByteArray(0),
+                        true, true, true, true, appId, apiHash,
+                        "en", "Android", "Example", "1.0"
                     )) { }
                 }
-                is TdApi.AuthorizationStateWaitPhoneNumber -> {
-                    _authState.value = AuthState.EnterPhone
-                }
-                is TdApi.AuthorizationStateWaitCode -> {
-                    _authState.value = AuthState.EnterCode
-                }
-                is TdApi.AuthorizationStateWaitPassword -> {
-                    _authState.value = AuthState.EnterPassword
-                }
+                is TdApi.AuthorizationStateWaitPhoneNumber -> _authState.value = AuthState.EnterPhone
+                is TdApi.AuthorizationStateWaitCode -> _authState.value = AuthState.EnterCode
+                is TdApi.AuthorizationStateWaitPassword -> _authState.value = AuthState.EnterPassword
                 is TdApi.AuthorizationStateReady -> {
                     fetchMe()
+                    loadChats()
                 }
-                is TdApi.AuthorizationStateClosed -> {
-                    _authState.value = AuthState.EnterCredentials
-                }
-                else -> {
-                    // Ignore other states
-                }
+                is TdApi.AuthorizationStateClosed -> _authState.value = AuthState.EnterCredentials
+                else -> {}
             }
         }
     }
 
     fun submitPhone(phone: String) {
-        phoneNumber = phone
         _authState.value = AuthState.Loading
         client?.send(TdApi.SetAuthenticationPhoneNumber(phone, null)) { result ->
-            if (result is TdApi.Error) {
-                _authState.value = AuthState.Error(result.message)
-                // Revert to phone input?
-                viewModelScope.launch { _authState.value = AuthState.EnterPhone }
-            }
+            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.EnterPhone }
         }
     }
 
     fun submitCode(code: String) {
         _authState.value = AuthState.Loading
         client?.send(TdApi.CheckAuthenticationCode(code)) { result ->
-            if (result is TdApi.Error) {
-                _authState.value = AuthState.Error(result.message)
-                viewModelScope.launch { _authState.value = AuthState.EnterCode }
-            }
+            if (result is TdApi.Error) viewModelScope.launch { _authState.value = AuthState.EnterCode }
         }
     }
 
     private fun fetchMe() {
         client?.send(TdApi.GetMe()) { result ->
-            viewModelScope.launch {
-                if (result is TdApi.User) {
-                    _authState.value = AuthState.LoggedIn(result)
-                } else {
-                    _authState.value = AuthState.Error("Failed to get user info")
+            if (result is TdApi.User) viewModelScope.launch { _authState.value = AuthState.LoggedIn(result) }
+        }
+    }
+
+    fun loadChats() {
+        _isLoadingContent.value = true
+        // Get up to 100 chats
+        client?.send(TdApi.GetChats(null, 100)) { result ->
+            if (result is TdApi.Chats) {
+                val chatList = mutableListOf<TdApi.Chat>()
+                var count = 0
+                result.chatIds.forEach { chatId ->
+                    client?.send(TdApi.GetChat(chatId)) { chat ->
+                        if (chat is TdApi.Chat) {
+                            synchronized(chatList) { chatList.add(chat) }
+                        }
+                        count++
+                        if (count == result.chatIds.size) {
+                            viewModelScope.launch {
+                                _chats.value = chatList.filter { 
+                                    it.type is TdApi.ChatTypeSupergroup || it.type is TdApi.ChatTypeBasicGroup 
+                                }
+                                _isLoadingContent.value = false
+                            }
+                        }
+                    }
                 }
+            } else {
+                viewModelScope.launch { _isLoadingContent.value = false }
+            }
+        }
+    }
+
+    fun loadVideos(chatId: Long) {
+        _videos.value = emptyList()
+        _isLoadingContent.value = true
+        // Search for videos in the chat
+        client?.send(TdApi.SearchChatMessages(chatId, "", null, 0, 0, 100, TdApi.SearchMessagesFilterVideo(), 0)) { result ->
+            if (result is TdApi.Messages) {
+                viewModelScope.launch {
+                    _videos.value = result.messages.toList()
+                    _isLoadingContent.value = false
+                }
+            } else {
+                viewModelScope.launch { _isLoadingContent.value = false }
             }
         }
     }
