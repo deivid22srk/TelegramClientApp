@@ -147,18 +147,16 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // 10 parameters SearchChatMessages constructor
+        // constructor(chatId: Long, query: String?, senderId: TdApi.MessageSender?, fromMessageId: Long, offset: Int, limit: Int, filter: TdApi.SearchMessagesFilter?, messageThreadId: Long): TdApi.SearchChatMessages
         client?.send(TdApi.SearchChatMessages(
             chatId, 
             "", // query
-            null, // filterTopic
-            null, // sender
+            null, // senderId
             0, // fromMessageId
             0, // offset
             100, // limit
             TdApi.SearchMessagesFilterVideo(), // filter
-            0, // minDate
-            0 // maxDate
+            0 // messageThreadId
         )) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
