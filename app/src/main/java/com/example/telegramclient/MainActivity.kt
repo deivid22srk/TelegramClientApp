@@ -37,6 +37,10 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -223,6 +227,7 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
     var selectedVideoFileId by remember { mutableStateOf<Int?>(null) }
     var currentTab by remember { mutableIntStateOf(0) }
     var isEditingProfile by remember { mutableStateOf(false) }
+    var isCloudDriveOpen by remember { mutableStateOf(false) }
 
     if (isEditingProfile) {
         BackHandler { isEditingProfile = false }
@@ -240,6 +245,9 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
                 viewModel.isPlaybackActive.value = false
             }
         )
+    } else if (isCloudDriveOpen) {
+        BackHandler { isCloudDriveOpen = false }
+        CloudDriveScreen(viewModel, onBack = { isCloudDriveOpen = false })
     } else if (selectedChatId != null) {
         BackHandler { selectedChatId = null }
         ChatScreen(viewModel, selectedChatId!!,
@@ -257,7 +265,8 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
             is AuthState.LoggedIn -> {
                 LoggedInMainScreen(viewModel, currentTab, onTabChange = { currentTab = it },
                     onGroupClick = { selectedChatId = it },
-                    onEditProfile = { isEditingProfile = true })
+                    onEditProfile = { isEditingProfile = true },
+                    onCloudDrive = { isCloudDriveOpen = true })
             }
             is AuthState.Error -> ErrorScreen(state.message) { }
         }
@@ -295,6 +304,24 @@ fun GroupsScreen(viewModel: TelegramViewModel, onGroupClick: (Long) -> Unit) {
 
 @Composable
 fun ChatListItem(chat: TdApi.Chat, avatarPath: String?, onClick: () -> Unit) {
+    val lastMsgText = remember(chat.lastMessage?.content) {
+        when (val content = chat.lastMessage?.content) {
+            is TdApi.MessageText -> content.text.text
+            is TdApi.MessageVideo -> "🎥 Vídeo"
+            is TdApi.MessagePhoto -> "🖼️ Foto"
+            is TdApi.MessageAnimation -> "GIF"
+            is TdApi.MessageAudio -> "🎵 Áudio"
+            is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
+            is TdApi.MessageDocument -> "📄 Documento"
+            else -> "Mensagem"
+        }
+    }
+    val timeText = remember(chat.lastMessage?.date) {
+        chat.lastMessage?.let { lastMsg ->
+            android.text.format.DateFormat.format("HH:mm", lastMsg.date.toLong() * 1000).toString()
+        } ?: ""
+    }
+
     ListItem(
         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
         leadingContent = {
@@ -310,24 +337,11 @@ fun ChatListItem(chat: TdApi.Chat, avatarPath: String?, onClick: () -> Unit) {
         },
         headlineContent = { Text(chat.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1) },
         supportingContent = {
-            val lastMsgText = remember(chat.lastMessage?.content) {
-                when (val content = chat.lastMessage?.content) {
-                    is TdApi.MessageText -> content.text.text
-                    is TdApi.MessageVideo -> "🎥 Vídeo"
-                    is TdApi.MessagePhoto -> "🖼️ Foto"
-                    is TdApi.MessageAnimation -> "GIF"
-                    is TdApi.MessageAudio -> "🎵 Áudio"
-                    is TdApi.MessageVoiceNote -> "🎤 Mensagem de voz"
-                    is TdApi.MessageDocument -> "📄 Documento"
-                    else -> "Mensagem"
-                }
-            }
             Text(lastMsgText, style = MaterialTheme.typography.bodyMedium, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
         },
         trailingContent = {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                chat.lastMessage?.let { lastMsg ->
-                    val timeText = remember(lastMsg.date) { android.text.format.DateFormat.format("HH:mm", lastMsg.date.toLong() * 1000).toString() }
+                if (timeText.isNotEmpty()) {
                     Text(text = timeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 }
                 if (chat.unreadCount > 0) {
@@ -341,7 +355,7 @@ fun ChatListItem(chat: TdApi.Chat, avatarPath: String?, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChange: (Int) -> Unit, onGroupClick: (Long) -> Unit, onEditProfile: () -> Unit) {
+fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChange: (Int) -> Unit, onGroupClick: (Long) -> Unit, onEditProfile: () -> Unit, onCloudDrive: () -> Unit) {
     Scaffold(
         topBar = {
             val title = if (currentTab == 0) "Conversas" else "Meu Perfil"
@@ -359,7 +373,7 @@ fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChang
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
-            if (currentTab == 0) GroupsScreen(viewModel, onGroupClick) else SettingsScreen(viewModel, onEditClick = onEditProfile)
+            if (currentTab == 0) GroupsScreen(viewModel, onGroupClick) else SettingsScreen(viewModel, onEditClick = onEditProfile, onCloudDrive = onCloudDrive)
         }
     }
 }
@@ -463,9 +477,28 @@ fun ChatMessageItem(message: TdApi.Message, downloadedFiles: Map<Int, String>, u
                 if (!isOutgoing && sender != null) { Text(text = "${sender.firstName} ${sender.lastName}".trim(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 4.dp)) }
                 when (val content = message.content) {
                     is TdApi.MessageText -> { Text(content.text.text, style = MaterialTheme.typography.bodyMedium) }
-                    is TdApi.MessageVideo -> { VideoMessageContent(content.video, downloadedFiles, onVideoClick) }
-                    is TdApi.MessagePhoto -> { PhotoMessageContent(content.photo, downloadedFiles) }
-                    is TdApi.MessageDocument -> { if (content.document.mimeType.startsWith("video/")) { VideoMessageContent(content.document, downloadedFiles, onVideoClick) } else { Text("📄 ${content.document.fileName}", style = MaterialTheme.typography.bodyMedium) } }
+                    is TdApi.MessageVideo -> {
+                        VideoMessageContent(content.video, downloadedFiles, onVideoClick)
+                        if (content.caption.text.isNotEmpty()) {
+                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    is TdApi.MessagePhoto -> {
+                        PhotoMessageContent(content.photo, downloadedFiles)
+                        if (content.caption.text.isNotEmpty()) {
+                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    is TdApi.MessageDocument -> {
+                        if (content.document.mimeType.startsWith("video/")) {
+                            VideoMessageContent(content.document, downloadedFiles, onVideoClick)
+                        } else {
+                            Text("📄 ${content.document.fileName}", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        if (content.caption.text.isNotEmpty()) {
+                            Text(content.caption.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
                     else -> { Text("Mensagem não suportada", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline) }
                 }
                 Text(text = android.text.format.DateFormat.format("HH:mm", message.date.toLong() * 1000).toString(), style = MaterialTheme.typography.labelSmall, color = if (isOutgoing) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.align(Alignment.End).padding(top = 2.dp))
@@ -598,7 +631,7 @@ fun LoadingScreen() { Box(modifier = Modifier.fillMaxSize(), contentAlignment = 
 @Composable
 fun ErrorScreen(message: String, onRetry: () -> Unit) { Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text("Error", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.error); Text(message); Button(onClick = onRetry) { Text("Retry") } } }
 @Composable
-fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit) {
+fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit, onCloudDrive: () -> Unit) {
     val authState by viewModel.authState.collectAsStateWithLifecycle(); val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle(); val darkMode by viewModel.darkMode.collectAsStateWithLifecycle(); val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
     val user = (authState as? AuthState.LoggedIn)?.user
     if (user != null) {
@@ -625,6 +658,10 @@ fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     ProfileInfoItem(Icons.Default.Person, "Nome de usuário", user.usernames?.activeUsernames?.firstOrNull() ?: "Não definido")
                     HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(modifier = Modifier.fillMaxWidth().clickable { onCloudDrive() }) {
+                        ProfileInfoItem(Icons.Default.Cloud, "Cloud Drive", "Meus arquivos, pastas e backup")
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                     ProfileInfoItem(Icons.Default.Settings, "Configurações da Conta", "Privacidade, Notificações...")
                 }
             }
@@ -646,5 +683,124 @@ fun ProfileInfoItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)); Spacer(modifier = Modifier.width(16.dp))
         Column { Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline); Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium) }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
+    val cloudChatId by viewModel.cloudDriveChatId.collectAsStateWithLifecycle()
+    val messages by viewModel.cloudDriveMessages.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoadingContent.collectAsStateWithLifecycle()
+    val chats by viewModel.chats.collectAsStateWithLifecycle()
+    var showChatSelector by remember { mutableStateOf(false) }
+
+    // Logic to organize files by folders (using captions as metadata for folder paths)
+    val filesByFolder = remember(messages) {
+        val map = mutableMapOf<String, MutableList<TdApi.Message>>()
+        messages.forEach { msg ->
+            val caption = (msg.content as? TdApi.MessageDocument)?.caption?.text ?: ""
+            val folder = if (caption.startsWith("/")) caption.substringBeforeLast("/", "/") else "/"
+            map.getOrPut(folder) { mutableListOf() }.add(msg)
+        }
+        map
+    }
+
+    var currentFolderPath by remember { mutableStateOf("/") }
+    var showNewFolderDialog by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (currentFolderPath == "/") "Cloud Drive" else currentFolderPath.removePrefix("/"), fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = { if (currentFolderPath == "/") onBack() else currentFolderPath = "/" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar") } },
+                actions = { IconButton(onClick = { showChatSelector = true }) { Icon(Icons.Default.Settings, contentDescription = "Configurar Chat") } }
+            )
+        },
+        floatingActionButton = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                SmallFloatingActionButton(onClick = { showNewFolderDialog = true }, containerColor = MaterialTheme.colorScheme.secondaryContainer) { Icon(Icons.Default.Folder, contentDescription = "Nova Pasta") }
+                FloatingActionButton(onClick = { /* Upload logic placeholder */ }) { Icon(Icons.Default.Add, contentDescription = "Adicionar Arquivo") }
+            }
+        }
+    ) { padding ->
+        if (cloudChatId == 0L) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Cloud, modifier = Modifier.size(64.dp), contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                    Text("Nenhum chat selecionado para o Cloud Drive", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.outline)
+                    Button(onClick = { showChatSelector = true }, modifier = Modifier.padding(top = 16.dp)) { Text("Selecionar Chat") }
+                }
+            }
+        } else if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(120.dp),
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                if (currentFolderPath == "/") {
+                    items(filesByFolder.keys.filter { it != "/" }.toList()) { folder ->
+                        FolderItem(name = folder.removePrefix("/"), onClick = { currentFolderPath = folder })
+                    }
+                }
+                items(filesByFolder[currentFolderPath] ?: emptyList()) { msg ->
+                    val doc = (msg.content as TdApi.MessageDocument).document
+                    FileItem(name = doc.fileName, mimeType = doc.mimeType)
+                }
+            }
+        }
+
+        if (showChatSelector) {
+            AlertDialog(
+                onDismissRequest = { showChatSelector = false },
+                title = { Text("Selecionar Chat para Cloud Drive") },
+                text = {
+                    Column {
+                        Text("Escolha um grupo para armazenar seus arquivos. Recomendamos criar um grupo privado apenas com você.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+                        LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                            items(chats) { chat ->
+                                ListItem(
+                                    modifier = Modifier.clickable { viewModel.setCloudDriveChatId(chat.id); showChatSelector = false },
+                                    headlineContent = { Text(chat.title) },
+                                    leadingContent = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) }
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showChatSelector = false }) { Text("Fechar") } }
+            )
+        }
+
+        if (showNewFolderDialog) {
+            AlertDialog(
+                onDismissRequest = { showNewFolderDialog = false },
+                title = { Text("Nova Pasta") },
+                text = { OutlinedTextField(value = newFolderName, onValueChange = { newFolderName = it }, label = { Text("Nome da pasta") }, singleLine = true) },
+                confirmButton = { Button(onClick = { /* In a real app, this might upload a dummy file or update state */ showNewFolderDialog = false; newFolderName = "" }) { Text("Criar") } },
+                dismissButton = { TextButton(onClick = { showNewFolderDialog = false }) { Text("Cancelar") } }
+            )
+        }
+    }
+}
+
+@Composable
+fun FolderItem(name: String, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onClick() }) {
+        Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary)
+        Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+fun FileItem(name: String, mimeType: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.secondary)
+        Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }

@@ -53,6 +53,12 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _colorTheme = MutableStateFlow(settingsManager.getColorTheme())
     val colorTheme = _colorTheme.asStateFlow()
 
+    private val _cloudDriveChatId = MutableStateFlow(settingsManager.getCloudDriveChatId())
+    val cloudDriveChatId = _cloudDriveChatId.asStateFlow()
+
+    private val _cloudDriveMessages = MutableStateFlow<List<TdApi.Message>>(emptyList())
+    val cloudDriveMessages = _cloudDriveMessages.asStateFlow()
+
     val isPlaybackActive = MutableStateFlow(false)
 
     var client: Client? = null
@@ -67,6 +73,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             is TdApi.UpdateNewMessage -> onNewMessage(result.message)
             is TdApi.UpdateMessageContent -> onMessageContentUpdated(result.chatId, result.messageId, result.newContent)
             is TdApi.UpdateChatLastMessage -> onChatLastMessageUpdated(result.chatId, result.lastMessage)
+            is TdApi.UpdateChatPosition -> onChatPositionUpdated(result.chatId, result.position)
         }
     }
 
@@ -93,26 +100,36 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     private fun onChatLastMessageUpdated(chatId: Long, lastMessage: TdApi.Message?) {
         viewModelScope.launch {
-            val currentChats = _chats.value.toMutableList()
-            val index = currentChats.indexOfFirst { it.id == chatId }
-            if (index != -1) {
-                val chat = currentChats[index]
-                chat.lastMessage = lastMessage
-                currentChats.removeAt(index)
-                currentChats.add(0, chat) // Move to top
-                _chats.value = currentChats
+            client?.send(TdApi.GetChat(chatId)) { result ->
+                if (result is TdApi.Chat) {
+                    updateChatInList(result)
+                }
             }
         }
     }
 
-    private fun onChatUnreadCountUpdated(chatId: Long, unreadCount: Int) {
+    private fun onChatPositionUpdated(chatId: Long, position: TdApi.ChatPosition) {
+        viewModelScope.launch {
+            client?.send(TdApi.GetChat(chatId)) { result ->
+                if (result is TdApi.Chat) {
+                    updateChatInList(result)
+                }
+            }
+        }
+    }
+
+    private fun updateChatInList(chat: TdApi.Chat) {
+        if (chat.type !is TdApi.ChatTypeSupergroup && chat.type !is TdApi.ChatTypeBasicGroup) return
         viewModelScope.launch {
             val currentChats = _chats.value.toMutableList()
-            val index = currentChats.indexOfFirst { it.id == chatId }
+            val index = currentChats.indexOfFirst { it.id == chat.id }
             if (index != -1) {
-                currentChats[index].unreadCount = unreadCount
-                _chats.value = currentChats
+                currentChats.removeAt(index)
             }
+            // Add at correct position or simply top for now as it's an update
+            currentChats.add(0, chat)
+            // Sort by position if needed, but TDLib positions are complex
+            _chats.value = currentChats.distinctBy { it.id }
         }
     }
 
@@ -375,5 +392,28 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteProfilePhoto(photoId: Long) {
         client?.send(TdApi.DeleteProfilePhoto(photoId)) { fetchMe() }
+    }
+
+    fun setCloudDriveChatId(chatId: Long) {
+        _cloudDriveChatId.value = chatId
+        settingsManager.saveCloudDriveChatId(chatId)
+        if (chatId != 0L) loadCloudDriveMessages()
+    }
+
+    fun loadCloudDriveMessages() {
+        val chatId = _cloudDriveChatId.value
+        if (chatId == 0L) return
+        _isLoadingContent.value = true
+        // Search all documents in the cloud drive chat
+        client?.send(TdApi.SearchChatMessages(chatId, null, "", null, 0L, 0, 200, TdApi.SearchMessagesFilterDocument())) { result ->
+            if (result is TdApi.FoundChatMessages) {
+                viewModelScope.launch {
+                    _cloudDriveMessages.value = result.messages.toList()
+                    _isLoadingContent.value = false
+                }
+            } else {
+                viewModelScope.launch { _isLoadingContent.value = false }
+            }
+        }
     }
 }
