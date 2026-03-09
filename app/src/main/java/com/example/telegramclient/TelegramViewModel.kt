@@ -35,11 +35,17 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _messages = MutableStateFlow<List<TdApi.Message>>(emptyList())
     val messages = _messages.asStateFlow()
 
+    private val _pinnedMessage = MutableStateFlow<TdApi.Message?>(null)
+    val pinnedMessage = _pinnedMessage.asStateFlow()
+
     private val _isLoadingContent = MutableStateFlow(false)
     val isLoadingContent = _isLoadingContent.asStateFlow()
 
     private val _downloadedFiles = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadedFiles = _downloadedFiles.asStateFlow()
+
+    private val _users = MutableStateFlow<Map<Long, TdApi.User>>(emptyMap())
+    val users = _users.asStateFlow()
 
     private val _darkMode = MutableStateFlow(settingsManager.getDarkMode())
     val darkMode = _darkMode.asStateFlow()
@@ -60,6 +66,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             is TdApi.UpdateFile -> onUpdateFile(result.file)
             is TdApi.UpdateNewMessage -> onNewMessage(result.message)
             is TdApi.UpdateMessageContent -> onMessageContentUpdated(result.chatId, result.messageId, result.newContent)
+            is TdApi.UpdateChatLastMessage -> onChatLastMessageUpdated(result.chatId, result.lastMessage)
         }
     }
 
@@ -68,17 +75,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             if (_messages.value.isNotEmpty() && _messages.value.first().chatId == message.chatId) {
                 _messages.value = listOf(message) + _messages.value
                 requestThumbnails(message)
-            }
-            // Update chat list if needed
-            val currentChats = _chats.value.toMutableList()
-            val index = currentChats.indexOfFirst { it.id == message.chatId }
-            if (index != -1) {
-                val chat = currentChats[index]
-                chat.lastMessage = message
-                if (!message.isOutgoing) chat.unreadCount++
-                currentChats.removeAt(index)
-                currentChats.add(0, chat)
-                _chats.value = currentChats
+                fetchSenderInfo(message.senderId)
             }
         }
     }
@@ -88,9 +85,33 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             val currentMessages = _messages.value.toMutableList()
             val index = currentMessages.indexOfFirst { it.id == messageId }
             if (index != -1) {
-                val oldMsg = currentMessages[index]
-                oldMsg.content = content
+                currentMessages[index] = currentMessages[index].apply { this.content = content }
                 _messages.value = currentMessages
+            }
+        }
+    }
+
+    private fun onChatLastMessageUpdated(chatId: Long, lastMessage: TdApi.Message?) {
+        viewModelScope.launch {
+            val currentChats = _chats.value.toMutableList()
+            val index = currentChats.indexOfFirst { it.id == chatId }
+            if (index != -1) {
+                val chat = currentChats[index]
+                chat.lastMessage = lastMessage
+                currentChats.removeAt(index)
+                currentChats.add(0, chat) // Move to top
+                _chats.value = currentChats
+            }
+        }
+    }
+
+    private fun onChatUnreadCountUpdated(chatId: Long, unreadCount: Int) {
+        viewModelScope.launch {
+            val currentChats = _chats.value.toMutableList()
+            val index = currentChats.indexOfFirst { it.id == chatId }
+            if (index != -1) {
+                currentChats[index].unreadCount = unreadCount
+                _chats.value = currentChats
             }
         }
     }
@@ -196,7 +217,6 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
             if (result is TdApi.User) {
                 viewModelScope.launch {
                     _authState.value = AuthState.LoggedIn(result)
-                    // Request user avatar download
                     result.profilePhoto?.small?.let { file ->
                         if (!file.local.isDownloadingCompleted) {
                             client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
@@ -223,7 +243,6 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
                         client?.send(TdApi.GetChat(chatId)) { chat ->
                             if (chat is TdApi.Chat) {
                                 synchronized(chatList) { chatList.add(chat) }
-                                // Request avatar download
                                 chat.photo?.small?.let { file ->
                                     if (!file.local.isDownloadingCompleted) {
                                         client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
@@ -259,23 +278,54 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun loadChatHistory(chatId: Long) {
-        _messages.value = emptyList()
-        _isLoadingContent.value = true
+    fun loadChatHistory(chatId: Long, fromMessageId: Long = 0L) {
+        if (fromMessageId == 0L) {
+            _messages.value = emptyList()
+            _pinnedMessage.value = null
+            _isLoadingContent.value = true
+
+            // Fetch pinned message
+            client?.send(TdApi.SearchChatMessages(chatId, null, "", null, 0L, 0, 1, TdApi.SearchMessagesFilterPinned())) { result ->
+                if (result is TdApi.FoundChatMessages && result.messages.isNotEmpty()) {
+                    viewModelScope.launch { _pinnedMessage.value = result.messages[0] }
+                }
+            }
+        }
         
-        // p0: chatId, p1: fromMessageId, p2: offset, p3: limit, p4: onlyLocal
-        client?.send(TdApi.GetChatHistory(chatId, 0L, 0, 50, false)) { result ->
+        client?.send(TdApi.GetChatHistory(chatId, fromMessageId, if (fromMessageId == 0L) 0 else 1, 50, false)) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
-                    _messages.value = result.messages.toList()
+                    if (fromMessageId == 0L) {
+                        _messages.value = result.messages.toList()
+                    } else {
+                        _messages.value = _messages.value + result.messages.toList()
+                    }
                     _isLoadingContent.value = false
-                    // Request download for thumbnails in the loaded messages
                     result.messages.forEach { msg ->
                         requestThumbnails(msg)
+                        fetchSenderInfo(msg.senderId)
                     }
                 }
             } else {
                 viewModelScope.launch { _isLoadingContent.value = false }
+            }
+        }
+    }
+
+    private fun fetchSenderInfo(senderId: TdApi.MessageSender?) {
+        if (senderId is TdApi.MessageSenderUser) {
+            if (_users.value.containsKey(senderId.userId)) return
+            client?.send(TdApi.GetUser(senderId.userId)) { result ->
+                if (result is TdApi.User) {
+                    viewModelScope.launch {
+                        val current = _users.value.toMutableMap()
+                        current[result.id] = result
+                        _users.value = current
+                        result.profilePhoto?.small?.let { file ->
+                            client?.send(TdApi.DownloadFile(file.id, 1, 0, 0, false)) { }
+                        }
+                    }
+                }
             }
         }
     }
