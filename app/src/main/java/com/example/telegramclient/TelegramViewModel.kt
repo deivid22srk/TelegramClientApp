@@ -32,8 +32,8 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private val _chats = MutableStateFlow<List<TdApi.Chat>>(emptyList())
     val chats = _chats.asStateFlow()
 
-    private val _videos = MutableStateFlow<List<TdApi.Message>>(emptyList())
-    val videos = _videos.asStateFlow()
+    private val _messages = MutableStateFlow<List<TdApi.Message>>(emptyList())
+    val messages = _messages.asStateFlow()
 
     private val _isLoadingContent = MutableStateFlow(false)
     val isLoadingContent = _isLoadingContent.asStateFlow()
@@ -47,6 +47,47 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private var appId: Int = 0
     private var apiHash: String = ""
     private val appDir: String = application.filesDir.absolutePath + "/tdlib"
+
+    private val handler = Client.ResultHandler { result ->
+        when (result) {
+            is TdApi.UpdateAuthorizationState -> onAuthStateUpdated(result.authorizationState)
+            is TdApi.UpdateFile -> onUpdateFile(result.file)
+            is TdApi.UpdateNewMessage -> onNewMessage(result.message)
+            is TdApi.UpdateMessageContent -> onMessageContentUpdated(result.chatId, result.messageId, result.newContent)
+        }
+    }
+
+    private fun onNewMessage(message: TdApi.Message) {
+        viewModelScope.launch {
+            if (_messages.value.isNotEmpty() && _messages.value.first().chatId == message.chatId) {
+                _messages.value = listOf(message) + _messages.value
+                requestThumbnails(message)
+            }
+            // Update chat list if needed
+            val currentChats = _chats.value.toMutableList()
+            val index = currentChats.indexOfFirst { it.id == message.chatId }
+            if (index != -1) {
+                val chat = currentChats[index]
+                chat.lastMessage = message
+                if (!message.isOutgoing) chat.unreadCount++
+                currentChats.removeAt(index)
+                currentChats.add(0, chat)
+                _chats.value = currentChats
+            }
+        }
+    }
+
+    private fun onMessageContentUpdated(chatId: Long, messageId: Long, content: TdApi.MessageContent) {
+        viewModelScope.launch {
+            val currentMessages = _messages.value.toMutableList()
+            val index = currentMessages.indexOfFirst { it.id == messageId }
+            if (index != -1) {
+                val oldMsg = currentMessages[index]
+                oldMsg.content = content
+                _messages.value = currentMessages
+            }
+        }
+    }
 
     init {
         File(appDir).mkdirs()
@@ -78,12 +119,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     private fun createClient() {
         if (client != null) return
         client = Client.create(
-            { result ->
-                when (result) {
-                    is TdApi.UpdateAuthorizationState -> onAuthStateUpdated(result.authorizationState)
-                    is TdApi.UpdateFile -> onUpdateFile(result.file)
-                }
-            },
+            handler,
             { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") },
             { e -> Log.e("Telegram", "Error: ${e.localizedMessage}") }
         )
@@ -207,38 +243,54 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun loadVideos(chatId: Long) {
-        _videos.value = emptyList()
+    fun loadChatHistory(chatId: Long) {
+        _messages.value = emptyList()
         _isLoadingContent.value = true
         
-        val messagesList = mutableListOf<TdApi.Message>()
-        var searchCount = 0
-        val filters = listOf(TdApi.SearchMessagesFilterVideo(), TdApi.SearchMessagesFilterDocument())
-        
-        filters.forEach { filter ->
-            // p0: chatId, p1: filterTopic (MessageTopic!), p2: query, p3: sender (MessageSender!), p4: fromMessageId, p5: offset, p6: limit, p7: filter
-            client?.send(TdApi.SearchChatMessages(
-                chatId, 
-                null as TdApi.MessageTopic?,
-                "", 
-                null as TdApi.MessageSender?,
-                0L, 
-                0, 
-                100, 
-                filter
-            )) { result ->
-                if (result is TdApi.FoundChatMessages) {
-                    synchronized(messagesList) {
-                        messagesList.addAll(result.messages)
+        // p0: chatId, p1: fromMessageId, p2: offset, p3: limit, p4: onlyLocal
+        client?.send(TdApi.GetChatHistory(chatId, 0L, 0, 50, false)) { result ->
+            if (result is TdApi.Messages) {
+                viewModelScope.launch {
+                    _messages.value = result.messages.toList()
+                    _isLoadingContent.value = false
+                    // Request download for thumbnails in the loaded messages
+                    result.messages.forEach { msg ->
+                        requestThumbnails(msg)
                     }
                 }
-                searchCount++
-                if (searchCount == filters.size) {
-                    viewModelScope.launch {
-                        _videos.value = messagesList.sortedByDescending { it.date }
-                        _isLoadingContent.value = false
-                    }
+            } else {
+                viewModelScope.launch { _isLoadingContent.value = false }
+            }
+        }
+    }
+
+    private fun requestThumbnails(message: TdApi.Message) {
+        val fileId = when (val content = message.content) {
+            is TdApi.MessagePhoto -> content.photo.sizes.lastOrNull()?.photo?.id
+            is TdApi.MessageVideo -> content.video.thumbnail?.file?.id
+            is TdApi.MessageDocument -> content.document.thumbnail?.file?.id
+            else -> null
+        }
+
+        fileId?.let { id ->
+            client?.send(TdApi.DownloadFile(id, 1, 0, 0, false)) { }
+        }
+    }
+
+    fun loadVideos(chatId: Long) {
+        _messages.value = emptyList()
+        _isLoadingContent.value = true
+
+        val filter = TdApi.SearchMessagesFilterVideo()
+        client?.send(TdApi.SearchChatMessages(chatId, null, "", null, 0L, 0, 100, filter)) { result ->
+            if (result is TdApi.FoundChatMessages) {
+                viewModelScope.launch {
+                    _messages.value = result.messages.toList()
+                    _isLoadingContent.value = false
+                    result.messages.forEach { requestThumbnails(it) }
                 }
+            } else {
+                viewModelScope.launch { _isLoadingContent.value = false }
             }
         }
     }
