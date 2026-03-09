@@ -113,7 +113,6 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
 
     fun loadChats() {
         _isLoadingContent.value = true
-        // Use raw constructor for TdApi.GetChats
         client?.send(TdApi.GetChats(null, 100)) { result ->
             if (result is TdApi.Chats) {
                 val chatList = mutableListOf<TdApi.Chat>()
@@ -143,10 +142,19 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
     fun loadVideos(chatId: Long) {
         _videos.value = emptyList()
         _isLoadingContent.value = true
-        // SearchChatMessages parameters for TDLib 1.8.x:
-        // long chatId, String query, MessageTopic filterTopic (can be null), MessageSender sender (can be null), 
-        // long fromMessageId, int offset, int limit, SearchMessagesFilter filter, long minDate, long maxDate
-        client?.send(TdApi.SearchChatMessages(chatId, "", null, null, 0, 0, 100, TdApi.SearchMessagesFilterVideo(), 0, 0)) { result ->
+        // Correct 10-parameter SearchChatMessages call for TDLib 1.8.x
+        client?.send(TdApi.SearchChatMessages(
+            chatId, 
+            "", // query
+            null, // filterTopic (MessageTopic)
+            null, // sender (MessageSender)
+            0, // fromMessageId
+            0, // offset
+            100, // limit
+            TdApi.SearchMessagesFilterVideo(), // filter
+            0, // minDate
+            0 // maxDate
+        )) { result ->
             if (result is TdApi.Messages) {
                 viewModelScope.launch {
                     _videos.value = result.messages.toList()
