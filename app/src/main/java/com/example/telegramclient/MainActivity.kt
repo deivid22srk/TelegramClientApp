@@ -220,10 +220,17 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
     var currentTab by remember { mutableIntStateOf(0) }
     var isEditingProfile by remember { mutableStateOf(false) }
     var isCloudDriveOpen by remember { mutableStateOf(false) }
+    var currentSettingsSubScreen by remember { mutableStateOf<String?>(null) }
 
     if (isEditingProfile) {
         BackHandler { isEditingProfile = false }
         EditProfileScreen(viewModel, onBack = { isEditingProfile = false })
+    } else if (currentSettingsSubScreen != null) {
+        BackHandler { currentSettingsSubScreen = null }
+        when (currentSettingsSubScreen) {
+            "Appearance" -> AppearanceSettingsScreen(viewModel, onBack = { currentSettingsSubScreen = null })
+            "Downloads" -> DownloadSettingsScreen(viewModel, onBack = { currentSettingsSubScreen = null })
+        }
     } else if (selectedVideoFileId != null) {
         BackHandler {
             selectedVideoFileId = null
@@ -258,7 +265,8 @@ fun TelegramApp(viewModel: TelegramViewModel, isInPip: Boolean, isFullscreen: Bo
                 LoggedInMainScreen(viewModel, currentTab, onTabChange = { currentTab = it },
                     onGroupClick = { selectedChatId = it },
                     onEditProfile = { isEditingProfile = true },
-                    onCloudDrive = { isCloudDriveOpen = true })
+                    onCloudDrive = { isCloudDriveOpen = true },
+                    onSettingsSubScreen = { currentSettingsSubScreen = it })
             }
             is AuthState.Error -> ErrorScreen(state.message) { }
         }
@@ -347,7 +355,7 @@ fun ChatListItem(chat: TdApi.Chat, avatarPath: String?, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChange: (Int) -> Unit, onGroupClick: (Long) -> Unit, onEditProfile: () -> Unit, onCloudDrive: () -> Unit) {
+fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChange: (Int) -> Unit, onGroupClick: (Long) -> Unit, onEditProfile: () -> Unit, onCloudDrive: () -> Unit, onSettingsSubScreen: (String) -> Unit) {
     Scaffold(
         topBar = {
             val title = if (currentTab == 0) "Conversas" else "Meu Perfil"
@@ -365,7 +373,7 @@ fun LoggedInMainScreen(viewModel: TelegramViewModel, currentTab: Int, onTabChang
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
-            if (currentTab == 0) GroupsScreen(viewModel, onGroupClick) else SettingsScreen(viewModel, onEditClick = onEditProfile, onCloudDrive = onCloudDrive)
+            if (currentTab == 0) GroupsScreen(viewModel, onGroupClick) else SettingsScreen(viewModel, onEditClick = onEditProfile, onCloudDrive = onCloudDrive, onNavigate = onSettingsSubScreen)
         }
     }
 }
@@ -676,19 +684,13 @@ fun ErrorScreen(message: String, onRetry: () -> Unit) { Column(modifier = Modifi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit, onCloudDrive: () -> Unit) {
+fun SettingsScreen(viewModel: TelegramViewModel, onEditClick: () -> Unit, onCloudDrive: () -> Unit, onNavigate: (String) -> Unit) {
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
     val user = (authState as? AuthState.LoggedIn)?.user
 
-    var currentSubScreen by remember { mutableStateOf("Main") }
-
     if (user != null) {
-        when (currentSubScreen) {
-            "Main" -> SettingsMainScreen(user, downloadedFiles, onEditClick, onCloudDrive, onNavigate = { currentSubScreen = it })
-            "Appearance" -> AppearanceSettingsScreen(viewModel, onBack = { currentSubScreen = "Main" })
-            "Downloads" -> DownloadSettingsScreen(viewModel, onBack = { currentSubScreen = "Main" })
-        }
+        SettingsMainScreen(user, downloadedFiles, onEditClick, onCloudDrive, onNavigate)
     }
 }
 
@@ -842,9 +844,18 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     val filesByFolder = remember(messages) {
         val map = mutableMapOf<String, MutableList<TdApi.Message>>()
         messages.forEach { msg ->
-            val caption = (msg.content as? TdApi.MessageDocument)?.caption?.text ?: ""
-            val folder = if (caption.startsWith("/")) caption.substringBeforeLast("/", "/") else "/"
-            map.getOrPut(folder) { mutableListOf() }.add(msg)
+            val caption = when (val content = msg.content) {
+                is TdApi.MessageDocument -> content.caption.text
+                is TdApi.MessageText -> content.text.text
+                else -> ""
+            }
+            if (caption.startsWith("/")) {
+                val folder = if (caption.endsWith("/")) caption else caption.substringBeforeLast("/", "/") + "/"
+                val normalizedFolder = if (folder.startsWith("//")) folder.substring(1) else folder
+                map.getOrPut(normalizedFolder) { mutableListOf() }.add(msg)
+            } else {
+                map.getOrPut("/") { mutableListOf() }.add(msg)
+            }
         }
         map
     }
@@ -854,7 +865,7 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
     var newFolderName by remember { mutableStateOf("") }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { /* In a real app, convert URI to path and upload */ }
+        uri?.let { viewModel.uploadFileToDrive(it, currentFolderPath) }
     }
 
     Scaffold(
@@ -891,11 +902,13 @@ fun CloudDriveScreen(viewModel: TelegramViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (currentFolderPath == "/") {
-                    items(filesByFolder.keys.filter { it != "/" }.toList()) { folder ->
-                        FolderItem(name = folder.removePrefix("/"), onClick = { currentFolderPath = folder })
+                    val rootFolders = filesByFolder.keys.filter { it != "/" }.map { it.split("/").filter { s -> s.isNotEmpty() }.first() }.distinct()
+                    items(rootFolders) { folder ->
+                        FolderItem(name = folder, onClick = { currentFolderPath = "/$folder/" })
                     }
                 }
-                items(filesByFolder[currentFolderPath] ?: emptyList()) { msg ->
+
+                items(filesByFolder[currentFolderPath]?.filter { it.content is TdApi.MessageDocument } ?: emptyList()) { msg ->
                     val doc = (msg.content as TdApi.MessageDocument).document
                     FileItem(name = doc.fileName, mimeType = doc.mimeType)
                 }

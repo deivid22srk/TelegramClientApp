@@ -455,16 +455,49 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         val chatId = _cloudDriveChatId.value
         if (chatId == 0L) return
         _isLoadingContent.value = true
-        // Search all documents in the cloud drive chat
-        client?.send(TdApi.SearchChatMessages(chatId, null, "", null, 0L, 0, 200, TdApi.SearchMessagesFilterDocument())) { result ->
-            if (result is TdApi.FoundChatMessages) {
+
+        // Fetch last 500 messages to find documents and folder inits
+        client?.send(TdApi.GetChatHistory(chatId, 0, 0, 500, false)) { result ->
+            if (result is TdApi.Messages) {
                 viewModelScope.launch {
-                    _cloudDriveMessages.value = result.messages.toList()
+                    _cloudDriveMessages.value = result.messages.filter {
+                        it.content is TdApi.MessageDocument || it.content is TdApi.MessageText
+                    }
                     _isLoadingContent.value = false
+                    // Request thumbnails for docs
+                    result.messages.forEach { requestThumbnails(it) }
                 }
             } else {
                 viewModelScope.launch { _isLoadingContent.value = false }
             }
         }
+    }
+
+    fun uploadFileToDrive(uri: android.net.Uri, folder: String) {
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val inputStream = context.contentResolver.openInputStream(uri) ?: return@launch
+                val fileName = getFileName(context, uri) ?: "file_${System.currentTimeMillis()}"
+                val tempFile = File(context.cacheDir, fileName)
+                tempFile.outputStream().use { inputStream.copyTo(it) }
+
+                sendDocument(_cloudDriveChatId.value, tempFile.absolutePath, caption = "$folder$fileName")
+            } catch (e: Exception) {
+                Log.e("Telegram", "Upload failed", e)
+            }
+        }
+    }
+
+    private fun getFileName(context: android.content.Context, uri: android.net.Uri): String? {
+        var name: String? = null
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val index = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index != -1) name = it.getString(index)
+            }
+        }
+        return name
     }
 }
