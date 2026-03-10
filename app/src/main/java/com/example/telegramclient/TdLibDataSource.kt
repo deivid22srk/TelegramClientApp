@@ -45,10 +45,9 @@ class TdLibDataSource(
 
         // Request TDLib to start downloading this part
         // priority 32 is high for streaming
-        // We use position as offset and length as limit
-        // Using a 10MB chunk size for pre-fetching when opening/seeking
-        val prefetchSize = 10 * 1024 * 1024L
-        client.send(TdApi.DownloadFile(fileId, 32, position, prefetchSize, false)) { }
+        // Instead of limit, we request the whole file from this point
+        // TDLib will optimize the download, but we ensure the part we need is prioritized
+        client.send(TdApi.DownloadFile(fileId, 32, position, 0, false)) { }
 
         opened = true
         transferStarted(dataSpec)
@@ -72,46 +71,51 @@ class TdLibDataSource(
 
         // We might need to retry if the part isn't downloaded yet
         var attempts = 0
-        while (resultData == null && attempts < 15) {
+        // Increased attempts to 30 for better resilience during slow networks/seeking
+        while (resultData == null && attempts < 30) {
             val latch = CountDownLatch(1)
-            client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead)) { result ->
+            client.send(TdApi.ReadFilePart(fileId, currentPosition, countToRead.toLong())) { result ->
                 if (result is TdApi.Data) {
                     resultData = result.data
                 } else {
-                    // If failed, make sure the file is still being downloaded
-                    // Using a larger chunk size for pre-fetching when seeking
-                    // 4MB prefetch
-                    val downloadSize = if (countToRead < 4 * 1024 * 1024) 4 * 1024 * 1024L else countToRead
-                    client.send(TdApi.DownloadFile(fileId, 32, currentPosition, downloadSize, false)) { }
+                    // Force a higher priority download of the missing part
+                    client.send(TdApi.DownloadFile(fileId, 32, currentPosition, 1024 * 1024L, false)) { }
                 }
                 latch.countDown()
             }
-            // Increase wait time slightly
-            latch.await(500L + (attempts * 200), TimeUnit.MILLISECONDS)
+
+            // Wait with exponential backoff-like delay
+            latch.await(300L + (attempts * 100), TimeUnit.MILLISECONDS)
+
             if (resultData == null) {
                 attempts++
-                Log.w("TdLibDataSource", "Read failed for $fileId at $currentPosition, attempt $attempts")
+                Log.w("TdLibDataSource", "Read attempt $attempts failed for $fileId at $currentPosition")
 
-                // Periodically re-send DownloadFile to ensure it's high priority
-                if (attempts % 3 == 0) {
-                     client.send(TdApi.DownloadFile(fileId, 32, currentPosition, 0, false)) { }
+                // Every 5 attempts, check file status
+                if (attempts % 5 == 0) {
+                    client.send(TdApi.GetFile(fileId)) { }
                 }
             }
         }
 
-        resultData?.let {
-            val actualRead = min(it.size.toLong(), countToRead).toInt()
-            System.arraycopy(it, 0, buffer, offset, actualRead)
+        if (resultData != null) {
+            val actualRead = min(resultData!!.size.toLong(), countToRead).toInt()
+            System.arraycopy(resultData!!, 0, buffer, offset, actualRead)
             bytesRead = actualRead
 
             currentPosition += actualRead
             if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
                 bytesRemaining -= actualRead
             } else if (totalFileSize != C.LENGTH_UNSET.toLong()) {
-                // If length was unset, we check against total size
                 if (currentPosition >= totalFileSize) bytesRemaining = 0
             }
             bytesTransferred(actualRead)
+        } else {
+            // If we still have no data after many attempts, and we're not at EOF
+            if (totalFileSize != C.LENGTH_UNSET.toLong() && currentPosition < totalFileSize) {
+                Log.e("TdLibDataSource", "Timeout reading $fileId at $currentPosition")
+                throw java.io.IOException("Timeout waiting for TDLib file part at $currentPosition")
+            }
         }
 
         return if (bytesRead > 0) bytesRead else C.RESULT_END_OF_INPUT

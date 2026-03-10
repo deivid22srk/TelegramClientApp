@@ -1098,7 +1098,7 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
         }
     }
 
-    val exoPlayer = remember {
+    val exoPlayer = remember(fileId) {
         viewModel.isPlaybackActive.value = true
         val factory = TdLibDataSourceFactory(viewModel.client!!, fileId)
         ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(context).setDataSourceFactory(factory)).build().apply {
@@ -1116,6 +1116,14 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
                 }
                 override fun onPositionDiscontinuity(oldPosition: androidx.media3.common.Player.PositionInfo, newPosition: androidx.media3.common.Player.PositionInfo, reason: Int) {
                     currentPosition = newPosition.positionMs
+                }
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    Log.e("ExoPlayer", "Playback error: ${error.localizedMessage}", error)
+                    // Attempt to recover on certain errors
+                    if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED) {
+                        this@apply.prepare()
+                        this@apply.play()
+                    }
                 }
             })
         }
@@ -1142,14 +1150,29 @@ fun VideoPlayerScreen(viewModel: TelegramViewModel, fileId: Int, isInPip: Boolea
                     IconButton(onClick = onFullscreenToggle) { Icon(imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, contentDescription = "Tela Cheia", tint = Color.White) }
                 }
                 Row(modifier = Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    IconButton(onClick = { exoPlayer.seekTo(currentPosition - 10000) }) { Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
-                    Surface(onClick = {
-                        if (isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        isPlaying = exoPlayer.isPlaying
-                    }, shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), contentColor = Color.White) {
+                    IconButton(onClick = {
+                        exoPlayer.seekTo(maxOf(0, currentPosition - 10000))
+                    }) { Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
+
+                    Surface(
+                        onClick = {
+                            if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                                exoPlayer.seekTo(0)
+                                exoPlayer.play()
+                            } else {
+                                if (isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            }
+                        },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                        contentColor = Color.White
+                    ) {
                         Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pausar" else "Reproduzir", modifier = Modifier.padding(16.dp).size(48.dp))
                     }
-                    IconButton(onClick = { exoPlayer.seekTo(currentPosition + 10000) }) { Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
+
+                    IconButton(onClick = {
+                        exoPlayer.seekTo(minOf(duration, currentPosition + 10000))
+                    }) { Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(48.dp)) }
                 }
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp).align(Alignment.BottomCenter)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(formatTime(currentPosition), color = Color.White, style = MaterialTheme.typography.labelSmall); Text(formatTime(duration), color = Color.White, style = MaterialTheme.typography.labelSmall) }
