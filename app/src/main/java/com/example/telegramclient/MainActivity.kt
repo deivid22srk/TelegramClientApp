@@ -1689,17 +1689,24 @@ fun VlcPlayerScreen(viewModel: TelegramViewModel, fileId: Int, onBack: () -> Uni
         }
     }
 
+    val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
+
+    LaunchedEffect(downloadedFiles[fileId]) {
+        downloadedFiles[fileId]?.let { path ->
+            val media = Media(libVLC, path)
+            mediaPlayer.media = media
+            media.release()
+            mediaPlayer.play()
+        } ?: run {
+            viewModel.downloadFile(fileId, "streaming_video")
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
                 VLCVideoLayout(ctx).apply {
                     mediaPlayer.attachViews(this, null, false, false)
-                    viewModel.downloadedFiles.value[fileId]?.let { path ->
-                        val media = Media(libVLC, path)
-                        mediaPlayer.media = media
-                        media.release()
-                    } ?: run { viewModel.downloadFile(fileId, "streaming_video") }
-                    mediaPlayer.play()
                 }
             },
             modifier = Modifier.fillMaxSize()

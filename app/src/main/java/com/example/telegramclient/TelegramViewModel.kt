@@ -106,7 +106,7 @@ class TelegramViewModel(application: Application) : AndroidViewModel(application
         _connectionState.value = state
     }
 
-    private val downloadingFiles = mutableMapOf<Int, String>()
+    private val downloadingFiles = java.util.concurrent.ConcurrentHashMap<Int, String>()
 
     private fun onNewMessage(message: TdApi.Message) {
         viewModelScope.launch {
