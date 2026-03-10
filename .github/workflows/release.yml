@@ -23,7 +23,7 @@ jobs:
           cache: 'gradle'
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
+        run: chmod +x gradlew
 
       - name: Build with Gradle
         # We build the bundle (AAB) and APKs.
